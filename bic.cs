@@ -28,7 +28,7 @@ public class BicForm: Form {
     }
 
     private void InitializeComponent() {
-
+    
 		SetStyle(ControlStyles.AllPaintingInWmPaint | 
 				ControlStyles.UserPaint | 
 				ControlStyles.DoubleBuffer, true);
