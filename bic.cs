@@ -28,11 +28,6 @@ public class BicForm: Form {
     }
 
     private void InitializeComponent() {
-    
-		SetStyle(ControlStyles.AllPaintingInWmPaint | 
-				ControlStyles.UserPaint | 
-				ControlStyles.DoubleBuffer, true);
-
         Text = "bic";
         Size = new Size(320,200);
 
@@ -73,27 +68,11 @@ public class BicForm: Form {
         CenterToScreen();
     }
 
-
-	protected override void OnResizeBegin(EventArgs e) {
-		base.OnResizeBegin(e);
-		this.SuspendLayout();
-		chatBox.Visible = false;
-	}
-
-	protected override void OnResizeEnd(EventArgs e) {
-		base.OnResizeEnd(e);
-		this.ResumeLayout();
-		chatBox.Visible = true;
-		chatBox.ScrollToCaret();
-	}
-
-
-
     private void ChatBox_LinkClicked(object sender, LinkClickedEventArgs e)
     {
         // Open the link in the default browser
         System.Diagnostics.Process.Start(e.LinkText);
-    }	
+    }
 
     private void Connect() {
         try {
