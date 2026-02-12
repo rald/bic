@@ -7,6 +7,7 @@ using System.Threading;
 using System.Drawing;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.IO;  // Added for file operations
 
 public class BicForm: Form {
 
@@ -68,20 +69,19 @@ public class BicForm: Form {
         CenterToScreen();
     }
 
-	protected override void OnResizeBegin(EventArgs e) {
-		base.OnResizeBegin(e);
-		this.SuspendLayout();
-	}
+    protected override void OnResizeBegin(EventArgs e) {
+        base.OnResizeBegin(e);
+        this.SuspendLayout();
+    }
 
-	protected override void OnResizeEnd(EventArgs e) {
-		base.OnResizeEnd(e);
-		this.ResumeLayout();
-		chatBox.ScrollToCaret();
-	}
+    protected override void OnResizeEnd(EventArgs e) {
+        base.OnResizeEnd(e);
+        this.ResumeLayout();
+        chatBox.ScrollToCaret();
+    }
 
     private void ChatBox_LinkClicked(object sender, LinkClickedEventArgs e)
     {
-        // Open the link in the default browser
         System.Diagnostics.Process.Start(e.LinkText);
     }
 
@@ -130,7 +130,7 @@ public class BicForm: Form {
                 if (bytesRead == 0) break;
 
                 string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                string[] lines = message.Split(new char[] {'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries);
+                string[] lines = message.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
 
                 foreach (string line in lines) {
                     if (!string.IsNullOrEmpty(line)) {
@@ -159,12 +159,6 @@ public class BicForm: Form {
             ParsePrivmsg(raw);
         } else if (raw.Contains(" 001 ")) {
             AppendChat("<connected to " + serverHost + ":" + serverPort + ">", Color.Yellow);
-        } else if (raw.Contains(" 321 ")) {  // RPL_LISTSTART
-            AppendSystem(">>> channel list:");
-        } else if (raw.Contains(" 322 ")) {  // RPL_LIST
-            ParseListResponse(raw);
-        } else if (raw.Contains(" 323 ")) {  // RPL_LISTEND
-            AppendSystem(">>> end of channel list");
         } else if (raw.Contains(" 353 ")) {  // NAMES list
             ParseNamesList(raw);
         } else if (raw.Contains(" 366 ")) {  // End of NAMES
@@ -174,38 +168,20 @@ public class BicForm: Form {
         }
     }
 
-    private void ParseListResponse(string raw) {
-        try {
-            string[] parts = raw.Split(' ');
-            if (parts.Length < 5) return;
-            
-            // RPL_LIST format: "<channel> <usercount> :<topic>"
-            string channel = parts[3];
-            int userCount = int.Parse(parts[4]);
-            string topic = raw.Substring(raw.LastIndexOf(" :") + 2).Trim();
-            
-            string display = $"[{userCount}] {channel} <{topic}>";
-            AppendChat(display, Color.Cyan);
-        } catch {
-            AppendError("Failed to parse list: " + raw.Trim());
-        }
-    }
-
     private void ParseNamesList(string raw) {
         try {
             string[] parts = raw.Split(' ');
             if (parts.Length < 5) return;
             
-            string channel = parts[4];  // Channel name is parameter 4 (0-based index after command params)
+            string channel = parts[4];
             string namesPart = raw.Substring(raw.IndexOf(" :", raw.IndexOf(" 353 ")) + 2).Trim();
             
-            // Split names by spaces, handling nicks with spaces in prefixes by checking common IRC prefixes
             List<string> names = new List<string>();
             string currentName = "";
             
             for (int i = 0; i < namesPart.Length; i++) {
                 char c = namesPart[i];
-                if (c == ' ' && !currentName.EndsWith("\\")) {  // Split on space unless escaped
+                if (c == ' ' && !currentName.EndsWith("\\")) {
                     if (!string.IsNullOrEmpty(currentName)) {
                         names.Add(currentName.TrimStart(' ', '@', '+', '~', '&', '%', '!'));
                         currentName = "";
@@ -243,12 +219,18 @@ public class BicForm: Form {
         }
     }
 
-    private string StripIrcCodes(string message) {
-        message = Regex.Replace(message, @"\x03(\d{1,2}(?:,\d{1,2})?)?", "");
-        message = Regex.Replace(message, "[\x02\x0F\x12\x16\x1D\x1F]", "");
-        message = Regex.Replace(message, "[\x01-\x09\x0B-\x1F]", "");
-        return message;
-    }
+	private string StripIrcCodes(string message) {
+		// Color codes: \x03[fg][,bg]
+		message = Regex.Replace(message, @"\x03(?:\d{1,2}(?:,\d{1,2})?)?", "");
+		
+		// Formatting: bold, italic, underline, strikethrough, reverse, reset
+		message = Regex.Replace(message, "[\x02\x0F\x12\x16\x1D\x1F]", "");
+		
+		// Other visible controls only (preserve \x01 ACTION/CTCP)
+		message = Regex.Replace(message, "[\x10-\x11\x13-\x15\x17-\x1E]", "");
+		
+		return message;
+	}
 
     private void AppendChat(string text, Color foreColor = default(Color)) {
         if (InvokeRequired) {
@@ -259,7 +241,6 @@ public class BicForm: Form {
         int maxLines = 1024;
         if (chatBox.Lines.Length > maxLines)
         {
-            // Copy current lines, remove from the top
             var lines = chatBox.Lines.ToList();
             lines.RemoveRange(0, lines.Count - maxLines);
             chatBox.Lines = lines.ToArray();
@@ -304,10 +285,10 @@ public class BicForm: Form {
             e.Handled = true;
 
             DialogResult result = MessageBox.Show(
-                "Do you want to quit?", // Message
-                "Confirmation",             // Title
-                MessageBoxButtons.YesNo,    // Buttons
-                MessageBoxIcon.Question     // Icon
+                "Do you want to quit?",
+                "Confirmation",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question
             );
 
             if (result == DialogResult.Yes)
@@ -368,12 +349,10 @@ public class BicForm: Form {
             case "/target":
                 if (parts.Length > 1) {
                     string newTarget = parts[1];
-                    // Allow: #channel, or plain nickname (no !host allowed anymore)
                     if (newTarget.StartsWith("#")) {
                         currentTarget = newTarget;
                         AppendSystem(">>> target set to " + newTarget);
                     } else {
-                        // Treat as PM target: just a nick, not user!host
                         currentTarget = newTarget;
                         AppendSystem(">>> PM target: " + newTarget);
                     }
@@ -406,11 +385,6 @@ public class BicForm: Form {
                 } else {
                     AppendError("Usage: /names <#channel>");
                 }
-                break;
-
-            case "/list":
-                SendRaw("LIST\r\n");
-                AppendSystem(">>> requesting channel list...");
                 break;
 
             case "/msg":

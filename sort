@@ -1,0 +1,1 @@
+sort -k1,1rn list.txt
