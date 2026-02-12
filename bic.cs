@@ -84,6 +84,7 @@ public class BicForm: Form {
 		base.OnResizeEnd(e);
 		this.ResumeLayout();
 		chatBox.Visible = true;
+		chatBox.ScrollToCaret();
 	}
 
 
