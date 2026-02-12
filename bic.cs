@@ -28,6 +28,11 @@ public class BicForm: Form {
     }
 
     private void InitializeComponent() {
+
+		SetStyle(ControlStyles.AllPaintingInWmPaint | 
+				ControlStyles.UserPaint | 
+				ControlStyles.DoubleBuffer, true);
+
         Text = "bic";
         Size = new Size(320,200);
 
@@ -67,6 +72,21 @@ public class BicForm: Form {
 
         CenterToScreen();
     }
+
+
+	protected override void OnResizeBegin(EventArgs e) {
+		base.OnResizeBegin(e);
+		this.SuspendLayout();
+		chatBox.Visible = false;
+	}
+
+	protected override void OnResizeEnd(EventArgs e) {
+		base.OnResizeEnd(e);
+		this.ResumeLayout();
+		chatBox.Visible = true;
+	}
+
+
 
     private void ChatBox_LinkClicked(object sender, LinkClickedEventArgs e)
     {
@@ -147,7 +167,7 @@ public class BicForm: Form {
         if (raw.Contains(" PRIVMSG ")) {
             ParsePrivmsg(raw);
         } else if (raw.Contains(" 001 ")) {
-            AppendChat("<connected to " + serverHost + ":" + serverPort + ">", Color.Green);
+            AppendChat("<connected to " + serverHost + ":" + serverPort + ">", Color.Yellow);
         } else if (raw.Contains(" 321 ")) {  // RPL_LISTSTART
             AppendSystem(">>> channel list:");
         } else if (raw.Contains(" 322 ")) {  // RPL_LIST
@@ -206,7 +226,7 @@ public class BicForm: Form {
             if (!string.IsNullOrEmpty(currentName)) {
                 names.Add(currentName.TrimStart(' ', '@', '+', '~', '&', '%', '!'));
             }
-            
+
             string namesList = string.Join(", ", names);
             AppendSystem("Names " + channel + ": " + namesList);
         } catch {
@@ -291,7 +311,7 @@ public class BicForm: Form {
     private void BicForm_KeyDown(object sender, KeyEventArgs e) {
         if (e.KeyCode == Keys.Escape) {
             e.Handled = true;
-        
+
             DialogResult result = MessageBox.Show(
                 "Do you want to quit?", // Message
                 "Confirmation",             // Title
