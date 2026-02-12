@@ -68,6 +68,17 @@ public class BicForm: Form {
         CenterToScreen();
     }
 
+	protected override void OnResizeBegin(EventArgs e) {
+		base.OnResizeBegin(e);
+		this.SuspendLayout();
+	}
+
+	protected override void OnResizeEnd(EventArgs e) {
+		base.OnResizeEnd(e);
+		this.ResumeLayout();
+		chatBox.ScrollToCaret();
+	}
+
     private void ChatBox_LinkClicked(object sender, LinkClickedEventArgs e)
     {
         // Open the link in the default browser
