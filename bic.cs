@@ -162,7 +162,6 @@ public class BicForm: Form {
         } else if (raw.Contains(" 353 ")) {  // NAMES list
             ParseNamesList(raw);
         } else if (raw.Contains(" 366 ")) {  // End of NAMES
-            // Optional: could add a marker here if needed
         } else {
             AppendServer(raw.Trim());
         }
