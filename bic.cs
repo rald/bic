@@ -28,11 +28,11 @@ public class BicForm: Form {
     }
 
     private void InitializeComponent() {
-/*
+//*
 		SetStyle(	ControlStyles.AllPaintingInWmPaint |
 					ControlStyles.UserPaint |
 					ControlStyles.DoubleBuffer, true);
-*/
+//*/
         Text = "bic";
         Size = new Size(320,200);
 
@@ -173,7 +173,7 @@ public class BicForm: Form {
         } else if (raw.Contains(" 366 ")) {  // End of NAMES
             // Optional: could add a marker here if needed
         } else {
-            AppendServer(raw.Trim());
+            AppendServer(StripIrcCodes(raw).Trim());
         }
     }
 
@@ -181,14 +181,14 @@ public class BicForm: Form {
         try {
             string[] parts = raw.Split(' ');
             if (parts.Length < 5) return;
-            
+
             string channel = parts[4];  // Channel name is parameter 4 (0-based index after command params)
             string namesPart = raw.Substring(raw.IndexOf(" :", raw.IndexOf(" 353 ")) + 2).Trim();
-            
+
             // Split names by spaces, handling nicks with spaces in prefixes by checking common IRC prefixes
             List<string> names = new List<string>();
             string currentName = "";
-            
+
             for (int i = 0; i < namesPart.Length; i++) {
                 char c = namesPart[i];
                 if (c == ' ' && !currentName.EndsWith("\\")) {  // Split on space unless escaped
@@ -244,8 +244,7 @@ public class BicForm: Form {
         }
 
         int maxLines = 2048;
-        if (chatBox.Lines.Length > maxLines)
-        {
+        if (chatBox.Lines.Length > maxLines) {
             // Copy current lines, remove from the top
             var lines = chatBox.Lines.ToList();
             lines.RemoveRange(0, lines.Count - maxLines);
