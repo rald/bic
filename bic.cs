@@ -71,6 +71,7 @@ public class BicForm: Form {
         Controls.Add(inputBox);
 
         CenterToScreen();
+        
     }
 
 	protected override void OnResizeBegin(EventArgs e) {
@@ -290,18 +291,10 @@ public class BicForm: Form {
         if (e.KeyCode == Keys.Escape) {
             e.Handled = true;
 
-            DialogResult result = MessageBox.Show(
-                "Do you want to quit?", // Message
-                "Confirmation",             // Title
-                MessageBoxButtons.YesNo,    // Buttons
-                MessageBoxIcon.Question     // Icon
-            );
-
-            if (result == DialogResult.Yes)
-            {
-                Disconnect();
-                Close();
-            }
+			if (MessageBox.Show("Quit?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes) {
+				Disconnect();
+				Close();
+			}
         }
     }
 
