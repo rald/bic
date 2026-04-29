@@ -271,10 +271,12 @@ void display_privmsg(const char *prefix, const char *target, const char *message
         char *end = strchr(action_msg, '\x01');
         if (end) *end = '\0';
         if (strncmp(action_msg, "ACTION ", 7) == 0) {
-            append_log("* <%s> %s", nick, action_msg+7);
+            // New format: <target> * <nick> action
+            append_log("<%s> * <%s> %s", target, nick, action_msg+7);
             return;
         }
     }
+    // Normal message
     if (target[0] == '#')
         append_log("<%s> <%s> %s", target, nick, message);
     else
@@ -466,6 +468,38 @@ void execute_command(const char *cmdline) {
         irc.default_target[sizeof(irc.default_target)-1] = '\0';
         append_log("*** Default target set to %s", irc.default_target);
     }
+    else if (strcmp(cmd, "me") == 0) {
+        if (!IS_VALID_SOCKET(irc.sockfd)) {
+            append_log("*** Not connected. Use .connect first.");
+            return;
+        }
+        if (argc < 1) {
+            append_log("Usage: .me <action>");
+            return;
+        }
+        char target[64];
+        if (irc.default_target[0]) {
+            strcpy(target, irc.default_target);
+        } else if (irc.current_channel[0]) {
+            strcpy(target, irc.current_channel);
+        } else {
+            append_log("*** No target set. Use .join, .target, or .msg.");
+            return;
+        }
+        const char *ptr = cmdline + 4;
+        while (*ptr == ' ') ptr++;
+        if (!*ptr) {
+            append_log("Usage: .me <action>");
+            return;
+        }
+        char action[512];
+        strncpy(action, ptr, sizeof(action)-1);
+        action[sizeof(action)-1] = '\0';
+        
+        // Send CTCP ACTION with octal escapes (no warning)
+        send_raw("PRIVMSG %s :\001ACTION %s\001", target, action);
+        append_log("<%s> * <%s> %s", target, irc.nickname, action);
+    }
     else if (strcmp(cmd, "names") == 0) {
         if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
         if (argc >= 1) send_raw("NAMES %s", arg1); else send_raw("NAMES");
@@ -499,17 +533,18 @@ void execute_command(const char *cmdline) {
     }
     else if (strcmp(cmd, "help") == 0) {
         append_log("--- BIC IRC Client Commands ---");
-        append_log(".connect <server> <port> <nick>");
-        append_log(".join <channel>");
-        append_log(".part [channel] [reason]");
-        append_log(".target [target]      -- set default target (channel or nick)");
-        append_log(".names [channel]");
-        append_log(".list [pattern]");
-        append_log(".nick <newnick>");
-        append_log(".msg <target> <text>");
-        append_log(".quit [message]");
-        append_log(".help");
-        append_log("Any line not starting with '.' is sent to current default target or joined channel.");
+        append_log(".connect <server> <port> <nick>   -- connect to IRC server");
+        append_log(".join <channel>                  -- join a channel");
+        append_log(".part [channel] [reason]         -- leave a channel (default: current)");
+        append_log(".target [target]                 -- set default target for non‑command lines");
+        append_log(".names [channel]                 -- list nicks in a channel (or all)");
+        append_log(".list [pattern]                  -- list channels matching pattern (or all)");
+        append_log(".nick <newnick>                  -- change your nickname");
+        append_log(".msg <target> <text>             -- send private message to target");
+        append_log(".me <action>                     -- send CTCP ACTION (/me) to current target");
+        append_log(".quit [message]                  -- disconnect from server (optional quit message)");
+        append_log(".help                            -- show this help");
+        append_log("Press Up/Down arrows to cycle through message history.");
     }
     else {
         append_log("Unknown command: .%s. Type .help", cmd);
