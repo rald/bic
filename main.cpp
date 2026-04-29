@@ -1,13 +1,15 @@
-// BIC - BIC IRC Client (light green on black, monospace font, default button)
-// Compile:
-//   Linux/macOS: g++ -std=c++11 -o bic bic.cpp -lfltk -lpthread
-//   Windows:     g++ -std=c++11 -o bic bic.cpp -lfltk -lws2_32
+// BIC - BIC IRC Client (light green on black, monospace, history, PgUp/PgDn)
+// Compile: g++ -std=c++11 -o bic bic.cpp -lfltk -lpthread -lX11
+// Windows:  g++ -std=c++11 -o bic.exe bic.cpp -lfltk -lws2_32
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <cstdarg>
+#include <cstring>
+#include <vector>
+#include <string>
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Text_Display.H>
@@ -17,7 +19,7 @@
 #include <FL/fl_ask.H>
 
 // --------------------------------------------------------------
-// Platform-specific socket headers and functions
+// Platform-specific socket headers
 // --------------------------------------------------------------
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN
@@ -60,12 +62,87 @@ struct IRCClient {
     char current_channel[64];
     char nickname[32];
     char default_target[64];
+    // History
+    std::vector<std::string> history;
+    int history_pos;          // -1 = new line, else index into history
+    std::string saved_input;  // what was typed before starting history browsing
 };
 
 static IRCClient irc;
 
 // --------------------------------------------------------------
-// Time stamp (12-hour format)
+// Custom input widget with history and PgUp/PgDn
+// --------------------------------------------------------------
+class HistoryInput : public Fl_Input {
+private:
+    void recall_older() {
+        if (irc.history.empty()) return;
+        // Save current input if we are not already in history browsing mode
+        if (irc.history_pos == -1) {
+            irc.saved_input = value();
+            irc.history_pos = (int)irc.history.size() - 1;
+        } else if (irc.history_pos > 0) {
+            irc.history_pos--;
+        } else {
+            return; // already at oldest
+        }
+        value(irc.history[irc.history_pos].c_str());
+        position(strlen(value()));
+        redraw();
+    }
+
+    void recall_newer() {
+        if (irc.history.empty()) return;
+        if (irc.history_pos == -1) return; // already at new line
+        if (irc.history_pos == (int)irc.history.size() - 1) {
+            // Return to the original input
+            irc.history_pos = -1;
+            value(irc.saved_input.c_str());
+        } else {
+            irc.history_pos++;
+            value(irc.history[irc.history_pos].c_str());
+        }
+        position(strlen(value()));
+        redraw();
+    }
+
+public:
+    HistoryInput(int x, int y, int w, int h, const char *l = 0)
+        : Fl_Input(x, y, w, h, l) {}
+
+    int handle(int event) override {
+        if (event == FL_KEYBOARD) {
+            int key = Fl::event_key();
+            // Up/Down history
+            if (key == FL_Up) {
+                recall_older();
+                return 1;
+            }
+            if (key == FL_Down) {
+                recall_newer();
+                return 1;
+            }
+#if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
+            // Page Up / Page Down scroll the chat display (FLTK 1.3+)
+            if (key == FL_Page_Up || key == FL_Page_Down) {
+                Fl_Scrollbar *sb = irc.logdisp->scrollbar();
+                if (sb) {
+                    if (key == FL_Page_Up)
+                        sb->value(sb->value() - sb->linesize());
+                    else
+                        sb->value(sb->value() + sb->linesize());
+                    irc.logdisp->redraw();
+                }
+                return 1;
+            }
+#endif
+        }
+        return Fl_Input::handle(event);
+    }
+};
+
+// --------------------------------------------------------------
+// Timestamp (12‑hour format)
 // --------------------------------------------------------------
 const char* get_timestamp() {
     static char time_str[20];
@@ -81,17 +158,17 @@ const char* get_timestamp() {
 }
 
 // --------------------------------------------------------------
-// Auto‑scroll detection (FLTK 1.3+)
+// Auto‑scroll detection (only when at bottom, FLTK 1.3+)
 // --------------------------------------------------------------
-#if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
 bool at_bottom() {
+#if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
     Fl_Scrollbar *sb = irc.logdisp->scrollbar();
     if (!sb) return true;
     return (sb->value() + sb->linesize() >= sb->maximum() - 0.5);
-}
 #else
-bool at_bottom() { return true; }
+    return true;   // on older FLTK, always scroll (can't detect)
 #endif
+}
 
 // --------------------------------------------------------------
 // Append log with timestamp and smart scroll
@@ -114,7 +191,7 @@ void append_log(const char *fmt, ...) {
 }
 
 // --------------------------------------------------------------
-// Send raw IRC message
+// IRC network functions
 // --------------------------------------------------------------
 void send_raw(const char *fmt, ...) {
     if (!IS_VALID_SOCKET(irc.sockfd)) return;
@@ -131,9 +208,6 @@ void send_raw(const char *fmt, ...) {
 #endif
 }
 
-// --------------------------------------------------------------
-// IRC commands
-// --------------------------------------------------------------
 void join_channel(const char *channel) {
     if (!channel || !channel[0]) return;
     send_raw("JOIN %s", channel);
@@ -168,6 +242,10 @@ void disconnect(const char *quitmsg) {
         append_log("*** Disconnected");
         irc.current_channel[0] = '\0';
         irc.default_target[0] = '\0';
+        // Clear history on disconnect (optional)
+        irc.history.clear();
+        irc.history_pos = -1;
+        irc.saved_input.clear();
     }
 }
 
@@ -185,7 +263,7 @@ void display_privmsg(const char *prefix, const char *target, const char *message
     } else {
         strcpy(nick, prefix);
     }
-
+    // CTCP ACTION (/me)
     if (message[0] == '\x01') {
         char action_msg[512];
         strncpy(action_msg, message+1, sizeof(action_msg)-1);
@@ -197,16 +275,12 @@ void display_privmsg(const char *prefix, const char *target, const char *message
             return;
         }
     }
-
     if (target[0] == '#')
         append_log("<%s> <%s> %s", target, nick, message);
     else
         append_log("<%s> <%s> %s", target, nick, message);
 }
 
-// --------------------------------------------------------------
-// Socket callback
-// --------------------------------------------------------------
 void socket_callback(int fd, void*) {
     char buf[4096];
     int n = recv(fd, buf, sizeof(buf)-1, 0);
@@ -218,13 +292,15 @@ void socket_callback(int fd, void*) {
     buf[n] = '\0';
     char *line = strtok(buf, "\r\n");
     while (line) {
+        // PING reply
         if (strncmp(line, "PING", 4) == 0) {
             char *pong = strchr(line, ':');
             if (pong) send_raw("PONG :%s", pong+1);
             else send_raw("PONG");
             append_log("%s", line);
         }
-        else if (strncmp(line, ":", 1) == 0) {
+        else if (line[0] == ':') {
+            // PRIVMSG parsing
             char *prefix_end = strchr(line+1, ' ');
             if (prefix_end) {
                 char *cmd_start = prefix_end + 1;
@@ -266,7 +342,7 @@ void socket_callback(int fd, void*) {
 }
 
 // --------------------------------------------------------------
-// Helpers: trim, split args
+// Helper: trim and split command arguments
 // --------------------------------------------------------------
 void trim(char *str) {
     if (!str) return;
@@ -296,30 +372,26 @@ int split_args(const char *input, char *out1, char *out2, char *out3) {
 }
 
 // --------------------------------------------------------------
-// Connect to server
+// Connect to IRC server (cross‑platform)
 // --------------------------------------------------------------
 void connect_to_server(const char *server, int port, const char *nick) {
     if (IS_VALID_SOCKET(irc.sockfd)) {
         append_log("*** Already connected. Use .quit first.");
         return;
     }
-
     append_log("*** Connecting to %s port %d as %s...", server, port, nick);
-
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     char port_str[8];
     snprintf(port_str, sizeof(port_str), "%d", port);
-
     int err = getaddrinfo(server, port_str, &hints, &res);
     if (err != 0) {
         append_log("*** getaddrinfo error: %s", gai_strerror(err));
         fl_alert("Cannot resolve hostname: %s\nError: %s", server, gai_strerror(err));
         return;
     }
-
     int sock = SOCKET_ERROR_VAL;
     for (struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
         sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
@@ -329,21 +401,17 @@ void connect_to_server(const char *server, int port, const char *nick) {
         sock = SOCKET_ERROR_VAL;
     }
     freeaddrinfo(res);
-
     if (!IS_VALID_SOCKET(sock)) {
         int error = GET_ERROR();
         append_log("*** Connection failed: %s", socket_strerror(error));
         fl_alert("Connection to %s:%d failed: %s", server, port, socket_strerror(error));
         return;
     }
-
     irc.sockfd = sock;
     strncpy(irc.nickname, nick, sizeof(irc.nickname)-1);
     irc.nickname[sizeof(irc.nickname)-1] = '\0';
-
     send_raw("NICK %s", nick);
     send_raw("USER %s 0 * :BIC IRC Client", nick);
-
     Fl::add_fd(sock, FL_READ, socket_callback);
     append_log("*** Connected to %s:%d", server, port);
 }
@@ -362,62 +430,36 @@ void execute_command(const char *cmdline) {
     int argc = split_args(p, arg1, arg2, arg3);
 
     if (strcmp(cmd, "connect") == 0) {
-        if (argc < 3) {
-            append_log("Usage: .connect <server> <port> <nick>");
-            return;
-        }
+        if (argc < 3) { append_log("Usage: .connect <server> <port> <nick>"); return; }
         int port = atoi(arg2);
-        if (port <= 0 || port > 65535) {
-            append_log("Invalid port number: %s", arg2);
-            return;
-        }
+        if (port <= 0 || port > 65535) { append_log("Invalid port number: %s", arg2); return; }
         connect_to_server(arg1, port, arg3);
     }
     else if (strcmp(cmd, "join") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected. Use .connect first.");
-            return;
-        }
-        if (argc < 1) {
-            append_log("Usage: .join <channel>");
-            return;
-        }
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected. Use .connect first."); return; }
+        if (argc < 1) { append_log("Usage: .join <channel>"); return; }
         join_channel(arg1);
     }
     else if (strcmp(cmd, "part") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected.");
-            return;
-        }
-        char channel[128];
-        char reason[512] = {0};
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
+        char channel[128], reason[512] = {0};
         const char *ptr = cmdline + 5;
         while (*ptr == ' ') ptr++;
         int idx = 0;
-        while (*ptr && *ptr != ' ' && idx < (int)sizeof(channel)-1)
-            channel[idx++] = *ptr++;
+        while (*ptr && *ptr != ' ' && idx < (int)sizeof(channel)-1) channel[idx++] = *ptr++;
         channel[idx] = '\0';
         while (*ptr == ' ') ptr++;
-        if (*ptr) {
-            strncpy(reason, ptr, sizeof(reason)-1);
-            reason[sizeof(reason)-1] = '\0';
-        }
+        if (*ptr) strncpy(reason, ptr, sizeof(reason)-1);
         if (!channel[0]) {
-            if (irc.current_channel[0])
-                strcpy(channel, irc.current_channel);
-            else {
-                append_log("Usage: .part <channel> [reason]");
-                return;
-            }
+            if (irc.current_channel[0]) strcpy(channel, irc.current_channel);
+            else { append_log("Usage: .part <channel> [reason]"); return; }
         }
         part_channel(channel, reason);
     }
     else if (strcmp(cmd, "target") == 0) {
         if (argc < 1) {
-            if (irc.default_target[0])
-                append_log("*** Current default target: %s", irc.default_target);
-            else
-                append_log("*** No default target set (uses current channel).");
+            if (irc.default_target[0]) append_log("*** Current default target: %s", irc.default_target);
+            else append_log("*** No default target set (uses current channel).");
             return;
         }
         strncpy(irc.default_target, arg1, sizeof(irc.default_target)-1);
@@ -425,48 +467,24 @@ void execute_command(const char *cmdline) {
         append_log("*** Default target set to %s", irc.default_target);
     }
     else if (strcmp(cmd, "names") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected.");
-            return;
-        }
-        if (argc >= 1)
-            send_raw("NAMES %s", arg1);
-        else
-            send_raw("NAMES");
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
+        if (argc >= 1) send_raw("NAMES %s", arg1); else send_raw("NAMES");
     }
     else if (strcmp(cmd, "list") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected.");
-            return;
-        }
-        if (argc >= 1)
-            send_raw("LIST %s", arg1);
-        else
-            send_raw("LIST");
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
+        if (argc >= 1) send_raw("LIST %s", arg1); else send_raw("LIST");
     }
     else if (strcmp(cmd, "nick") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected.");
-            return;
-        }
-        if (argc < 1) {
-            append_log("Usage: .nick <newnick>");
-            return;
-        }
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
+        if (argc < 1) { append_log("Usage: .nick <newnick>"); return; }
         send_raw("NICK %s", arg1);
         strncpy(irc.nickname, arg1, sizeof(irc.nickname)-1);
         irc.nickname[sizeof(irc.nickname)-1] = '\0';
         append_log("*** Nickname changed to %s", arg1);
     }
     else if (strcmp(cmd, "msg") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) {
-            append_log("*** Not connected.");
-            return;
-        }
-        if (argc < 2) {
-            append_log("Usage: .msg <target> <message>");
-            return;
-        }
+        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
+        if (argc < 2) { append_log("Usage: .msg <target> <message>"); return; }
         const char *ptr = p;
         while (*ptr && *ptr != ' ') ptr++;
         while (*ptr == ' ') ptr++;
@@ -499,11 +517,18 @@ void execute_command(const char *cmdline) {
 }
 
 // --------------------------------------------------------------
-// Send callback
+// Callback for Send button / Enter
 // --------------------------------------------------------------
 void send_cb(Fl_Widget*, void*) {
     const char *text = irc.msg_input->value();
     if (strlen(text) == 0) return;
+
+    // ----- ADD TO HISTORY (both commands and normal messages) -----
+    irc.history.push_back(std::string(text));
+    if (irc.history.size() > 100) irc.history.erase(irc.history.begin());
+    irc.history_pos = -1;            // reset browsing position
+    irc.saved_input.clear();
+    // --------------------------------------------------------------
 
     if (text[0] == '.') {
         execute_command(text);
@@ -531,26 +556,20 @@ void send_cb(Fl_Widget*, void*) {
 }
 
 // --------------------------------------------------------------
-// Apply theme: light green on black, monospace font, default button
+// Theme: light green on black, monospace, default button
 // --------------------------------------------------------------
 void apply_theme(Fl_Window *win, Fl_Text_Display *disp, Fl_Input *inp, Fl_Button *btn) {
     win->color(FL_BLACK);
-    
     disp->color(FL_BLACK);
     disp->textcolor(FL_GREEN);
     disp->cursor_color(FL_GREEN);
     disp->selection_color(FL_DARK_GREEN);
-    disp->textfont(FL_COURIER);          // monospace
-    disp->textsize(FL_NORMAL_SIZE);
-    
+    disp->textfont(FL_COURIER);
     inp->color(FL_BLACK);
     inp->textcolor(FL_GREEN);
     inp->cursor_color(FL_GREEN);
-    inp->textfont(FL_COURIER);           // monospace
-    inp->textsize(FL_NORMAL_SIZE);
-    
-    // Button: default system colors only (no customisation)
-    // No Fl::scheme() call – use default system theme
+    inp->textfont(FL_COURIER);
+    // Button: leave default system colours
 }
 
 // --------------------------------------------------------------
@@ -573,7 +592,7 @@ int main() {
     logdisp->buffer(logbuf);
     logdisp->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
-    Fl_Input *msg_in = new Fl_Input(0, 420, 520, 30, "");
+    HistoryInput *msg_in = new HistoryInput(0, 420, 520, 30, "");
     msg_in->callback(send_cb);
     Fl_Button *send_btn = new Fl_Button(520, 420, 80, 30, "Send");
     send_btn->callback(send_cb);
@@ -582,7 +601,6 @@ int main() {
     win->end();
 
     apply_theme(win, logdisp, msg_in, send_btn);
-
     win->show();
     msg_in->take_focus();
 
@@ -593,6 +611,8 @@ int main() {
     irc.current_channel[0] = '\0';
     irc.nickname[0] = '\0';
     irc.default_target[0] = '\0';
+    irc.history_pos = -1;
+    irc.saved_input.clear();
 
     append_log("*** BIC IRC Client started. Type .help for commands.");
 
