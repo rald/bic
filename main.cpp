@@ -645,7 +645,6 @@ void execute_command(const char *cmdline) {
         append_log("---");
         append_log("Any line not starting with '.' is sent to default target or current channel.");
         append_log("Press Up/Down arrows to cycle through message history.");
-        append_log("Press Page Up/Down to scroll the chat (FLTK 1.3+).");
     }
     else {
         append_log("Unknown command: .%s. Type .help", cmd);
@@ -749,7 +748,7 @@ int main() {
     irc.saved_input.clear();
     irc.connect_attempt = false;
 
-    append_log("*** BIC IRC Client started (non‑blocking). Type .help for commands.");
+    append_log("*** BIC IRC Client started. Type .help for commands.");
 
     Fl::run();
 
