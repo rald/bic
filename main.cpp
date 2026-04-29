@@ -501,9 +501,16 @@ void execute_command(const char *cmdline) {
         append_log("<%s> * <%s> %s", target, irc.nickname, action);
     }
     else if (strcmp(cmd, "names") == 0) {
-        if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
-        if (argc >= 1) send_raw("NAMES %s", arg1); else send_raw("NAMES");
-    }
+        if (!IS_VALID_SOCKET(irc.sockfd)) {
+            append_log("*** Not connected.");
+            return;
+        }
+        if (argc < 1) {
+            append_log("Usage: .names <channel>");
+            return;
+        }
+        send_raw("NAMES %s", arg1);
+    }    
     else if (strcmp(cmd, "list") == 0) {
         if (!IS_VALID_SOCKET(irc.sockfd)) { append_log("*** Not connected."); return; }
         if (argc >= 1) send_raw("LIST %s", arg1); else send_raw("LIST");
@@ -537,7 +544,7 @@ void execute_command(const char *cmdline) {
         append_log(".join <channel>                  -- join a channel");
         append_log(".part [channel] [reason]         -- leave a channel (default: current)");
         append_log(".target [target]                 -- set default target for non‑command lines");
-        append_log(".names [channel]                 -- list nicks in a channel (or all)");
+        append_log(".names <channel>                 -- list nicks in a channel (or all)");
         append_log(".list [pattern]                  -- list channels matching pattern (or all)");
         append_log(".nick <newnick>                  -- change your nickname");
         append_log(".msg <target> <text>             -- send private message to target");
