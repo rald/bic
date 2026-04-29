@@ -565,7 +565,7 @@ int main() {
     }
 #endif
 
-    Fl_Window *win = new Fl_Window(600, 450, "BIC IRC Client (light green on black, monospace)");
+    Fl_Window *win = new Fl_Window(600, 450, "BIC - BIC IRC Client");
     win->begin();
 
     Fl_Text_Buffer *logbuf = new Fl_Text_Buffer();
@@ -594,7 +594,7 @@ int main() {
     irc.nickname[0] = '\0';
     irc.default_target[0] = '\0';
 
-    append_log("*** BIC IRC Client started (light green on black, monospace). Type .help for commands.");
+    append_log("*** BIC IRC Client started. Type .help for commands.");
 
     Fl::run();
 
