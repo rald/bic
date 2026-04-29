@@ -1,0 +1,2 @@
+# BIC - BIC IRC Client
+

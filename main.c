@@ -1,0 +1,489 @@
+// BIC - BIC IRC Client (private messages fixed, .target command)
+// Compile: g++ -std=c++11 -o bic bic.cpp -lfltk -lpthread
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <cstdarg>
+#include <cstring>
+#include <cstdio>
+#include <cerrno>
+#include <FL/Fl.H>
+#include <FL/Fl_Window.H>
+#include <FL/Fl_Text_Display.H>
+#include <FL/Fl_Text_Buffer.H>
+#include <FL/Fl_Input.H>
+#include <FL/Fl_Button.H>
+#include <FL/fl_ask.H>
+
+struct IRCClient {
+    int sockfd;
+    Fl_Text_Buffer *logbuf;
+    Fl_Text_Display *logdisp;
+    Fl_Input *msg_input;
+    char current_channel[64];
+    char nickname[32];
+    char default_target[64];
+};
+
+static IRCClient irc;
+
+const char* get_timestamp() {
+    static char time_str[20];
+    time_t rawtime;
+    struct tm *timeinfo;
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    strftime(time_str, sizeof(time_str), "%I:%M:%S %p", timeinfo);
+    if (time_str[0] == '0') {
+        for (int i = 0; time_str[i]; i++) time_str[i] = time_str[i+1];
+    }
+    return time_str;
+}
+
+#if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
+bool at_bottom() {
+    Fl_Scrollbar *sb = irc.logdisp->scrollbar();
+    if (!sb) return true;
+    return (sb->value() + sb->linesize() >= sb->maximum() - 0.5);
+}
+#else
+bool at_bottom() { return true; }
+#endif
+
+void append_log(const char *fmt, ...) {
+    char buffer[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, ap);
+    va_end(ap);
+    bool was_at_bottom = at_bottom();
+    char final[1100];
+    snprintf(final, sizeof(final), "<%s> %s", get_timestamp(), buffer);
+    irc.logbuf->append(final);
+    irc.logbuf->append("\n");
+    if (was_at_bottom) {
+        irc.logdisp->insert_position(irc.logbuf->length());
+        irc.logdisp->show_insert_position();
+    }
+}
+
+void send_raw(const char *fmt, ...) {
+    if (irc.sockfd < 0) return;
+    char buffer[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, ap);
+    va_end(ap);
+    strcat(buffer, "\r\n");
+    send(irc.sockfd, buffer, strlen(buffer), 0);
+}
+
+void join_channel(const char *channel) {
+    if (!channel || !channel[0]) return;
+    send_raw("JOIN %s", channel);
+    append_log("*** JOIN sent for %s", channel);
+    strncpy(irc.current_channel, channel, sizeof(irc.current_channel)-1);
+    irc.current_channel[sizeof(irc.current_channel)-1] = '\0';
+}
+
+void part_channel(const char *channel, const char *reason) {
+    if (!channel || !channel[0]) {
+        append_log("Usage: .part <channel> [reason]");
+        return;
+    }
+    if (reason && reason[0])
+        send_raw("PART %s :%s", channel, reason);
+    else
+        send_raw("PART %s", channel);
+    append_log("*** Left %s", channel);
+    if (strcmp(channel, irc.current_channel) == 0)
+        irc.current_channel[0] = '\0';
+}
+
+void disconnect(const char *quitmsg) {
+    if (irc.sockfd >= 0) {
+        if (quitmsg && quitmsg[0])
+            send_raw("QUIT :%s", quitmsg);
+        else
+            send_raw("QUIT :Leaving");
+        close(irc.sockfd);
+        Fl::remove_fd(irc.sockfd);
+        irc.sockfd = -1;
+        append_log("*** Disconnected");
+        irc.current_channel[0] = '\0';
+        irc.default_target[0] = '\0';
+    }
+}
+
+// FIXED: private messages now show <yournick> <sender> message
+void display_privmsg(const char *prefix, const char *target, const char *message) {
+    char nick[64];
+    const char *bang = strchr(prefix, '!');
+    if (bang) {
+        int len = bang - prefix;
+        if (len >= (int)sizeof(nick)) len = sizeof(nick)-1;
+        strncpy(nick, prefix, len);
+        nick[len] = '\0';
+    } else {
+        strcpy(nick, prefix);
+    }
+
+    if (message[0] == '\x01') {
+        char action_msg[512];
+        strncpy(action_msg, message+1, sizeof(action_msg)-1);
+        action_msg[sizeof(action_msg)-1] = '\0';
+        char *end = strchr(action_msg, '\x01');
+        if (end) *end = '\0';
+        if (strncmp(action_msg, "ACTION ", 7) == 0) {
+            append_log("* <%s> %s", nick, action_msg+7);
+            return;
+        }
+    }
+
+    if (target[0] == '#')
+        append_log("<%s> <%s> %s", target, nick, message);
+    else
+        append_log("<%s> <%s> %s", target, nick, message);
+}
+
+void socket_callback(int fd, void*) {
+    char buf[4096];
+    int n = recv(fd, buf, sizeof(buf)-1, 0);
+    if (n <= 0) {
+        append_log("*** Disconnected from server");
+        disconnect(NULL);
+        return;
+    }
+    buf[n] = '\0';
+    char *line = strtok(buf, "\r\n");
+    while (line) {
+        if (strncmp(line, "PING", 4) == 0) {
+            char *pong = strchr(line, ':');
+            if (pong) send_raw("PONG :%s", pong+1);
+            else send_raw("PONG");
+            append_log("%s", line);
+        }
+        else if (strncmp(line, ":", 1) == 0) {
+            char *prefix_end = strchr(line+1, ' ');
+            if (prefix_end) {
+                char *cmd_start = prefix_end + 1;
+                if (strncmp(cmd_start, "PRIVMSG ", 8) == 0) {
+                    char prefix[128];
+                    int prefix_len = prefix_end - line;
+                    if (prefix_len >= (int)sizeof(prefix)) prefix_len = sizeof(prefix)-1;
+                    strncpy(prefix, line+1, prefix_len);
+                    prefix[prefix_len] = '\0';
+                    char *target_start = cmd_start + 8;
+                    char *target_end = strchr(target_start, ' ');
+                    if (target_end) {
+                        char target[64];
+                        int target_len = target_end - target_start;
+                        if (target_len >= (int)sizeof(target)) target_len = sizeof(target)-1;
+                        strncpy(target, target_start, target_len);
+                        target[target_len] = '\0';
+                        char *colon = strchr(target_end+1, ':');
+                        if (colon) {
+                            const char *message = colon+1;
+                            display_privmsg(prefix, target, message);
+                        } else {
+                            append_log("%s", line);
+                        }
+                    } else {
+                        append_log("%s", line);
+                    }
+                } else {
+                    append_log("%s", line);
+                }
+            } else {
+                append_log("%s", line);
+            }
+        } else {
+            append_log("%s", line);
+        }
+        line = strtok(NULL, "\r\n");
+    }
+}
+
+void trim(char *str) {
+    if (!str) return;
+    char *start = str;
+    while (*start == ' ') start++;
+    char *end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\n' || *end == '\r')) end--;
+    *(end+1) = '\0';
+    if (start != str) memmove(str, start, strlen(start)+1);
+}
+
+int split_args(const char *input, char *out1, char *out2, char *out3) {
+    char buf[256];
+    strncpy(buf, input, sizeof(buf)-1);
+    buf[sizeof(buf)-1] = '\0';
+    char *args[3] = {out1, out2, out3};
+    int count = 0;
+    char *token = strtok(buf, " ");
+    while (token && count < 3) {
+        strncpy(args[count], token, 63);
+        args[count][63] = '\0';
+        trim(args[count]);
+        count++;
+        token = strtok(NULL, " ");
+    }
+    return count;
+}
+
+void connect_to_server(const char *server, int port, const char *nick) {
+    if (irc.sockfd >= 0) {
+        append_log("*** Already connected. Use .quit first.");
+        return;
+    }
+    append_log("*** Connecting to %s port %d as %s...", server, port, nick);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+    int err = getaddrinfo(server, port_str, &hints, &res);
+    if (err != 0) {
+        append_log("*** getaddrinfo error: %s", gai_strerror(err));
+        fl_alert("Cannot resolve hostname: %s\nError: %s", server, gai_strerror(err));
+        return;
+    }
+    int sock = -1;
+    for (struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock < 0) continue;
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(sock);
+        sock = -1;
+    }
+    freeaddrinfo(res);
+    if (sock < 0) {
+        append_log("*** Connection failed: %s", strerror(errno));
+        fl_alert("Connection to %s:%d failed: %s", server, port, strerror(errno));
+        return;
+    }
+    irc.sockfd = sock;
+    strncpy(irc.nickname, nick, sizeof(irc.nickname)-1);
+    irc.nickname[sizeof(irc.nickname)-1] = '\0';
+    send_raw("NICK %s", nick);
+    send_raw("USER %s 0 * :BIC IRC Client", nick);
+    Fl::add_fd(sock, FL_READ, socket_callback);
+    append_log("*** Connected to %s:%d", server, port);
+}
+
+void execute_command(const char *cmdline) {
+    char cmd[32];
+    char arg1[128], arg2[128], arg3[128];
+    const char *p = cmdline + 1;
+    int i = 0;
+    while (*p && *p != ' ') cmd[i++] = *p++;
+    cmd[i] = '\0';
+    while (*p == ' ') p++;
+    int argc = split_args(p, arg1, arg2, arg3);
+
+    if (strcmp(cmd, "connect") == 0) {
+        if (argc < 3) {
+            append_log("Usage: .connect <server> <port> <nick>");
+            return;
+        }
+        int port = atoi(arg2);
+        if (port <= 0 || port > 65535) {
+            append_log("Invalid port number: %s", arg2);
+            return;
+        }
+        connect_to_server(arg1, port, arg3);
+    }
+    else if (strcmp(cmd, "join") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected. Use .connect first.");
+            return;
+        }
+        if (argc < 1) {
+            append_log("Usage: .join <channel>");
+            return;
+        }
+        join_channel(arg1);
+    }
+    else if (strcmp(cmd, "part") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected.");
+            return;
+        }
+        char channel[128];
+        char reason[512] = {0};
+        const char *ptr = cmdline + 5;
+        while (*ptr == ' ') ptr++;
+        int idx = 0;
+        while (*ptr && *ptr != ' ' && idx < (int)sizeof(channel)-1) {
+            channel[idx++] = *ptr++;
+        }
+        channel[idx] = '\0';
+        while (*ptr == ' ') ptr++;
+        if (*ptr) {
+            strncpy(reason, ptr, sizeof(reason)-1);
+            reason[sizeof(reason)-1] = '\0';
+        }
+        if (!channel[0]) {
+            if (irc.current_channel[0]) {
+                strcpy(channel, irc.current_channel);
+            } else {
+                append_log("Usage: .part <channel> [reason]");
+                return;
+            }
+        }
+        part_channel(channel, reason);
+    }
+    else if (strcmp(cmd, "target") == 0) {
+        if (argc < 1) {
+            if (irc.default_target[0])
+                append_log("*** Current default target: %s", irc.default_target);
+            else
+                append_log("*** No default target set (uses current channel).");
+            return;
+        }
+        strncpy(irc.default_target, arg1, sizeof(irc.default_target)-1);
+        irc.default_target[sizeof(irc.default_target)-1] = '\0';
+        append_log("*** Default target set to %s", irc.default_target);
+    }
+    else if (strcmp(cmd, "names") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected.");
+            return;
+        }
+        if (argc >= 1)
+            send_raw("NAMES %s", arg1);
+        else
+            send_raw("NAMES");
+    }
+    else if (strcmp(cmd, "list") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected.");
+            return;
+        }
+        if (argc >= 1)
+            send_raw("LIST %s", arg1);
+        else
+            send_raw("LIST");
+    }
+    else if (strcmp(cmd, "nick") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected.");
+            return;
+        }
+        if (argc < 1) {
+            append_log("Usage: .nick <newnick>");
+            return;
+        }
+        send_raw("NICK %s", arg1);
+        strncpy(irc.nickname, arg1, sizeof(irc.nickname)-1);
+        irc.nickname[sizeof(irc.nickname)-1] = '\0';
+        append_log("*** Nickname changed to %s", arg1);
+    }
+    else if (strcmp(cmd, "msg") == 0) {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected.");
+            return;
+        }
+        if (argc < 2) {
+            append_log("Usage: .msg <target> <message>");
+            return;
+        }
+        const char *ptr = p;
+        while (*ptr && *ptr != ' ') ptr++;
+        while (*ptr == ' ') ptr++;
+        char message[512];
+        strncpy(message, ptr, sizeof(message)-1);
+        message[sizeof(message)-1] = '\0';
+        send_raw("PRIVMSG %s :%s", arg1, message);
+        append_log("<%s> <%s> %s", arg1, irc.nickname, message);
+    }
+    else if (strcmp(cmd, "quit") == 0) {
+        disconnect(argc >= 1 ? arg1 : NULL);
+    }
+    else if (strcmp(cmd, "help") == 0) {
+        append_log("--- BIC IRC Client Commands ---");
+        append_log(".connect <server> <port> <nick>");
+        append_log(".join <channel>");
+        append_log(".part [channel] [reason]");
+        append_log(".target [target]      -- set default target (channel or nick)");
+        append_log(".names [channel]");
+        append_log(".list [pattern]");
+        append_log(".nick <newnick>");
+        append_log(".msg <target> <text>");
+        append_log(".quit [message]");
+        append_log(".help");
+        append_log("Any line not starting with '.' is sent to the current default target or joined channel.");
+    }
+    else {
+        append_log("Unknown command: .%s. Type .help", cmd);
+    }
+}
+
+void send_cb(Fl_Widget*, void*) {
+    const char *text = irc.msg_input->value();
+    if (strlen(text) == 0) return;
+
+    if (text[0] == '.') {
+        execute_command(text);
+    } else {
+        if (irc.sockfd < 0) {
+            append_log("*** Not connected. Use .connect first.");
+        } else {
+            char target[64];
+            if (irc.default_target[0]) {
+                strcpy(target, irc.default_target);
+            } else if (irc.current_channel[0]) {
+                strcpy(target, irc.current_channel);
+            } else {
+                append_log("*** No target set. Use .join, .target, or .msg.");
+                irc.msg_input->value("");
+                irc.msg_input->take_focus();
+                return;
+            }
+            send_raw("PRIVMSG %s :%s", target, text);
+            append_log("<%s> <%s> %s", target, irc.nickname, text);
+        }
+    }
+    irc.msg_input->value("");
+    irc.msg_input->take_focus();
+}
+
+int main() {
+    Fl_Window *win = new Fl_Window(600, 450, "BIC - BIC IRC Client");
+    win->begin();
+    Fl_Text_Buffer *logbuf = new Fl_Text_Buffer();
+    Fl_Text_Display *logdisp = new Fl_Text_Display(0, 0, 600, 420);
+    logdisp->buffer(logbuf);
+    logdisp->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
+    Fl_Input *msg_in = new Fl_Input(0, 420, 520, 30, "");
+    msg_in->callback(send_cb);
+    Fl_Button *send_btn = new Fl_Button(520, 420, 80, 30, "Send");
+    send_btn->callback(send_cb);
+    win->resizable(logdisp);
+    win->end();
+    win->show();
+    msg_in->take_focus();
+
+    irc.sockfd = -1;
+    irc.logbuf = logbuf;
+    irc.logdisp = logdisp;
+    irc.msg_input = msg_in;
+    irc.current_channel[0] = '\0';
+    irc.nickname[0] = '\0';
+    irc.default_target[0] = '\0';
+
+    append_log("*** BIC IRC Client started. Type .help for commands.");
+
+    Fl::run();
+    if (irc.sockfd >= 0) disconnect(NULL);
+    return 0;
+}
