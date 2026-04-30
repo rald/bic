@@ -57,8 +57,11 @@ void IRCModel::sendAction(const std::string& target, const std::string& action) 
     sendRaw("PRIVMSG " + target + " :\001ACTION " + action + "\001");
 }
 
-void IRCModel::joinChannel(const std::string& channel) {
-    sendRaw("JOIN " + channel);
+void IRCModel::joinChannel(const std::string& channel, const std::string& key) {
+    if (key.empty())
+        sendRaw("JOIN " + channel);
+    else
+        sendRaw("JOIN " + channel + " " + key);
     currentChannel_ = channel;
     nicks_.clear();
 }

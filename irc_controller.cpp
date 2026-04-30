@@ -138,8 +138,13 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         model_->connectToServer(arg1, port, arg3);
     }
     else if (cmd == "join") {
-        if (arg1.empty()) { view_->appendMessage("Usage: /join <channel>"); return; }
-        model_->joinChannel(arg1);
+        if (arg1.empty()) {
+            view_->appendMessage("Usage: /join <channel> [key]");
+            return;
+        }
+        std::string channel = arg1;
+        std::string key = arg2;   // optional key, already split
+        model_->joinChannel(channel, key);
     }
     else if (cmd == "part") {
         std::string chan = arg1.empty() ? model_->getCurrentChannel() : arg1;
@@ -202,7 +207,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
     else if (cmd == "help") {
         view_->appendMessage("--- BIC IRC Client Commands ---");
         view_->appendMessage("/connect <server> <port> <nick>   -- connect to IRC server");
-        view_->appendMessage("/join <channel>                  -- join a channel");
+        view_->appendMessage("/join <channel> [key]            -- join a channel (with optional key)");
         view_->appendMessage("/part [channel] [reason]         -- leave channel (default: current)");
         view_->appendMessage("/target [target]                 -- set default target for non‑command lines");
         view_->appendMessage("/names <channel>                 -- list nicks in a channel");

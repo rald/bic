@@ -23,7 +23,8 @@ public:
     void sendRaw(const std::string& msg);
     void sendPrivmsg(const std::string& target, const std::string& msg);
     void sendAction(const std::string& target, const std::string& action);
-    void joinChannel(const std::string& channel);
+    // In irc_model.h, replace the existing joinChannel line with:
+    void joinChannel(const std::string& channel, const std::string& key = "");
     void partChannel(const std::string& channel, const std::string& reason = "");
     void changeNick(const std::string& newnick);
     void requestNames(const std::string& channel);
