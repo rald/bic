@@ -103,7 +103,7 @@ int HistoryInput::handle(int event) {
 
 // ---------- IRCView ----------
 IRCView::IRCView() {
-    window_ = new Fl_Window(600, 450, "BIC - BIC IRC Client (MVC)");
+    window_ = new Fl_Window(600, 450, "BIC - BIC IRC Client");
     logbuf_ = new Fl_Text_Buffer();
     logdisp_ = new Fl_Text_Display(0, 0, 600, 420);
     logdisp_->buffer(logbuf_);
