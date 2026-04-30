@@ -91,6 +91,12 @@ int HistoryInput::handle(int event) {
             }
             return 1;
         }
+        if (key == FL_Escape) {
+            if (escQuitCallback_) {
+                escQuitCallback_();
+                return 1;   // event handled
+            }
+        }        
         if (key == FL_Enter || key == FL_KP_Enter) {
             if (callback()) {
                 do_callback();
@@ -99,6 +105,14 @@ int HistoryInput::handle(int event) {
         }
     }
     return Fl_Input::handle(event);
+}
+
+void HistoryInput::setEscQuitCallback(std::function<void()> cb) {
+    escQuitCallback_ = cb;
+}
+
+void IRCView::setEscQuitCallback(std::function<void()> cb) {
+    input_->setEscQuitCallback(cb);
 }
 
 // ---------- IRCView ----------

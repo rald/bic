@@ -11,7 +11,6 @@ class Fl_Text_Display;
 class Fl_Text_Buffer;
 class Fl_Button;
 
-// Custom input widget with history, scrolling, and completion callbacks
 class HistoryInput : public Fl_Input {
 public:
     HistoryInput(int x, int y, int w, int h, const char* l = nullptr);
@@ -22,6 +21,7 @@ public:
                             std::function<void(const std::string&)> setSavedInput,
                             std::function<std::string()> getSavedInput);
     void setLogScrollCallback(std::function<void(bool)> scrollPage);
+    void setEscQuitCallback(std::function<void()> cb);  // NEW
     int handle(int event) override;
 
 private:
@@ -32,6 +32,7 @@ private:
     std::function<void(const std::string&)> setSavedInput_;
     std::function<std::string()> getSavedInput_;
     std::function<void(bool)> scrollPage_;
+    std::function<void()> escQuitCallback_;  // NEW
 };
 
 class IRCView {
@@ -53,10 +54,10 @@ public:
                              std::function<void(const std::string&)> setSavedInput,
                              std::function<std::string()> getSavedInput);
     void setLogScrollCallback(std::function<void(bool)> scrollPage);
+    void setEscQuitCallback(std::function<void()> cb);  // NEW
     bool isAtBottom() const;
     void scrollToBottom();
 
-    // Expose log display for scrolling (needed by controller)
     Fl_Text_Display* logDisplay() const { return logdisp_; }
 
 private:

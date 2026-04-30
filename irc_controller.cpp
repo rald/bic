@@ -4,6 +4,7 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Text_Display.H>
+#include <FL/fl_ask.H>
 #include <cstring>
 #include <cctype>
 #include <algorithm>
@@ -46,6 +47,16 @@ IRCController::IRCController()
     // No-op for FLTK 1.1 (scrollbar() method not available)
     view_->setLogScrollCallback([](bool) {});
 #endif
+
+    view_->setEscQuitCallback([this]() {
+        int choice = fl_choice("Quit BIC IRC Client?", "No", "Yes", NULL);
+        if (choice == 1) {   // "Yes" button (index 1)
+            model_->disconnect("Leaving");
+            view_->appendMessage("*** Goodbye!");
+            Fl::check();      // let the message appear
+            exit(0);
+        }
+});
 }
 
 void IRCController::run() {
@@ -58,12 +69,12 @@ void IRCController::run() {
 void IRCController::sendCallbackStatic(Fl_Widget*, void* data) {
     IRCController* self = static_cast<IRCController*>(data);
     // DEBUG: Uncomment to verify callback is triggered
-    self->view_->appendMessage("*** DEBUG: Send callback triggered");
+    // self->view_->appendMessage("*** DEBUG: Send callback triggered");
     self->onSendCommand(self->view_->getInputText());
 }
 
 void IRCController::onSendCommand(const std::string& input) {
-    view_->appendMessage("*** DEBUG: onSendCommand called with: '" + input + "'");  // DEBUG
+    // view_->appendMessage("*** DEBUG: onSendCommand called with: '" + input + "'");  // DEBUG
     if (input.empty()) return;
 
     history_.push_back(input);
