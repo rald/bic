@@ -83,10 +83,11 @@ void IRCController::onSendCommand(const std::string& input) {
                 view_->appendMessage("*** No target set. Use /join, /target, or /msg.");
             } else {
                 model_->sendPrivmsg(target, input);
-                if (target[0] == '#')
+                if (target[0] == '#') {
                     view_->appendMessage("[" + target + "] <" + model_->getNickname() + "> " + input);
-                else
-                    view_->appendMessage("[PM] <" + model_->getNickname() + "> " + input);
+                } else {
+                    view_->appendMessage("[PM] " + model_->getNickname() + " -> " + target + ": " + input);
+                }
             }
         }
     }
@@ -167,14 +168,19 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         model_->changeNick(arg1);
     }
     else if (cmd == "msg") {
-        if (arg1.empty() || arg2.empty()) { view_->appendMessage("Usage: /msg <target> <message>"); return; }
+        if (arg1.empty() || arg2.empty()) { 
+            view_->appendMessage("Usage: /msg <target> <message>"); 
+            return; 
+        }
         std::string message = rest.substr(arg1.size()+1);
         model_->sendPrivmsg(arg1, message);
-        if (arg1[0] == '#')
+        if (arg1[0] == '#') {
             view_->appendMessage("[" + arg1 + "] <" + model_->getNickname() + "> " + message);
-        else
-            view_->appendMessage("[PM] <" + model_->getNickname() + "> " + message);
-    }
+        } else {
+            // Outgoing PM: MyNick -> Target: message
+            view_->appendMessage("[PM] " + model_->getNickname() + " -> " + arg1 + ": " + message);
+        }
+    }    
     else if (cmd == "clear") {
         view_->clearDisplay();
         view_->appendMessage("*** Display cleared");
@@ -304,7 +310,7 @@ void IRCController::onChannelMessage(const std::string& target, const std::strin
 }
 
 void IRCController::onPmMessage(const std::string& nick, const std::string& msg) {
-    view_->appendMessage("[PM] <" + nick + "> " + msg);
+    view_->appendMessage("[PM] " + model_->getNickname() + " <- " + nick + ": " + msg);
 }
 
 void IRCController::onAction(const std::string& target, const std::string& nick, const std::string& action) {
