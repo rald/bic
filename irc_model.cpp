@@ -77,6 +77,8 @@ void IRCModel::changeNick(const std::string& newnick) {
 }
 
 void IRCModel::requestNames(const std::string& channel) {
+    // Clear current nick list for this channel before requesting fresh list
+    nicks_.clear();
     sendRaw("NAMES " + channel);
 }
 
@@ -278,7 +280,72 @@ void IRCModel::processLine(const std::string& line) {
         }
         return;
     }
-    if (cmd == "366") return; // end of names
+
+    // RPL_ENDOFMOTD (376) or ERR_NOMOTD (422)
+    if (cmd == "376" || cmd == "422") {
+        if (controller_) controller_->onMotdEnd();
+        return;
+    }
+    
+    if (cmd == "366") {
+        // Extract channel (third token) – fixed
+        size_t space1 = params.find(' ');
+        if (space1 != std::string::npos) {
+            size_t space2 = params.find(' ', space1 + 1);
+            if (space2 != std::string::npos) {
+                std::string channel = params.substr(space1 + 1, space2 - space1 - 1);
+                if (!channel.empty() && channel[0] == ':')
+                    channel = channel.substr(1);
+                if (controller_) {
+                    controller_->onNamesComplete(channel, nicks_);
+                }
+            }
+        }
+        return;
+    }
+
+    // Numeric replies (server messages)
+    if (cmd.size() == 3 && std::isdigit(cmd[0]) && std::isdigit(cmd[1]) && std::isdigit(cmd[2])) {
+        // Extract the human-readable message after the colon
+        size_t colon = params.find(':');
+        std::string msg = (colon != std::string::npos) ? params.substr(colon + 1) : params;
+        if (!msg.empty() && controller_) {
+            // Special handling for common numerics to produce prettier messages
+            int num = std::stoi(cmd);
+            switch (num) {
+                case 001: // RPL_WELCOME
+                    controller_->onServerMessage("Welcome to the IRC server: " + msg);
+                    break;
+                case 002: // RPL_YOURHOST
+                case 003: // RPL_CREATED
+                case 004: // RPL_MYINFO
+                    controller_->onServerMessage(msg);
+                    break;
+                case 251: // RPL_LUSERCLIENT
+                case 252: // RPL_LUSEROP
+                case 253: // RPL_LUSERUNKNOWN
+                case 254: // RPL_LUSERCHANNELS
+                case 255: // RPL_LUSERME
+                case 265: // RPL_LOCALUSERS
+                case 266: // RPL_GLOBALUSERS
+                    controller_->onServerMessage(msg);
+                    break;
+                case 372: // RPL_MOTD
+                    controller_->onServerMessage(msg);
+                    break;
+                case 375: // RPL_MOTDSTART
+                    controller_->onServerMessage("MOTD: " + msg);
+                    break;
+                // 376 handled separately (onMotdEnd)
+                // 422 handled separately (no MOTD)
+                default:
+                    // For any other numeric, just show the raw line (optional)
+                    // controller_->onRawLine(line);
+                    break;
+            }
+        }
+        return; // Don't show numeric again as raw line
+    }
 
     // PRIVMSG
     if (cmd == "PRIVMSG") {

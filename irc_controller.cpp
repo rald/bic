@@ -6,6 +6,7 @@
 #include <FL/Fl_Text_Display.H>
 #include <cstring>
 #include <cctype>
+#include <algorithm>
 
 IRCController::IRCController()
     : model_(new IRCModel())
@@ -319,4 +320,36 @@ void IRCController::onRawLine(const std::string& line) {
 
 void IRCController::onError(const std::string& error) {
     view_->appendMessage("*** ERROR: " + error);
+}
+
+void IRCController::onNamesComplete(const std::string& channel, const std::vector<std::string>& nicks) {
+    std::vector<std::string> allNicks = nicks;
+    
+    // Ensure own nickname is included
+    std::string myNick = model_->getNickname();
+    if (!myNick.empty() && std::find(allNicks.begin(), allNicks.end(), myNick) == allNicks.end()) {
+        allNicks.push_back(myNick);
+    }
+
+    // Optional: sort alphabetically
+    std::sort(allNicks.begin(), allNicks.end());
+
+    if (allNicks.empty()) {
+        view_->appendMessage("*** No users in " + channel);
+    } else {
+        std::string nicklist;
+        for (size_t i = 0; i < allNicks.size(); ++i) {
+            if (i > 0) nicklist += ", ";
+            nicklist += allNicks[i];
+        }
+        view_->appendMessage("*** Users in " + channel + ": " + nicklist);
+    }
+}
+
+void IRCController::onMotdEnd() {
+    view_->appendMessage("*** You can now join channels (e.g., /join #channel)");
+}
+
+void IRCController::onServerMessage(const std::string& msg) {
+    view_->appendMessage("*** " + msg);
 }

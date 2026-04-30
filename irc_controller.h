@@ -35,7 +35,10 @@ public:
     void onPmMessage(const std::string& nick, const std::string& msg);
     void onAction(const std::string& target, const std::string& nick, const std::string& action);
     void onRawLine(const std::string& line);
+    void onNamesComplete(const std::string& channel, const std::vector<std::string>& nicks);
     void onError(const std::string& error);
+    void onMotdEnd();
+    void onServerMessage(const std::string& msg);
 
 private:
     void executeCommand(const std::string& cmdLine);
