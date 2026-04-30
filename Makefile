@@ -5,7 +5,7 @@ CXXFLAGS = -std=c++11 -Wall -Wextra -O2
 LDLIBS = -lfltk -lpthread -lX11
 
 # Target executable
-TARGET = bic_mvc
+TARGET = bic
 
 # Source files
 SRCS = main.cpp irc_model.cpp irc_view.cpp irc_controller.cpp
