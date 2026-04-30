@@ -1,7 +1,5 @@
-// BIC - BIC IRC Client (non‑blocking connect, full debug logs)
-// Command trigger: '/'
-// Message format: [HH:MM:SS] [#channel] <nick> message  |  [PM] <nick> message
-// Actions: * nick action   |  System: *** text   |  Join/Part/Quit: *** nick has joined/left/quit
+// BIC - BIC IRC Client with nick completion (Tab)
+// Fixed: Enter works after completion, Tab never sends command, line buffering, safe disconnect
 // Compile: g++ -std=c++11 -o bic main.cpp -lfltk -lpthread -lX11
 
 #include <stdio.h>
@@ -12,6 +10,8 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <cctype>
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Text_Display.H>
@@ -61,6 +61,10 @@ struct IRCClient {
     std::string saved_input;
     bool connect_attempt;
     std::string line_buffer;
+    // nick completion
+    std::vector<std::string> nicks;      // nicknames in current channel
+    std::string completion_prefix;       // last completed prefix
+    int completion_index;                // cycling index
 };
 
 static IRCClient irc;
@@ -68,7 +72,7 @@ static IRCClient irc;
 static void connect_timeout(void*);
 
 // --------------------------------------------------------------
-// Custom input widget with history and PgUp/PgDn
+// Custom input widget with history, PgUp/PgDn, Tab completion, and Enter fix
 // --------------------------------------------------------------
 class HistoryInput : public Fl_Input {
 private:
@@ -129,6 +133,48 @@ public:
                 return 1;
             }
 #endif
+            // ----- Tab completion (never sends) -----
+            if (key == FL_Tab) {
+                if (irc.current_channel[0] != '\0' && !irc.nicks.empty()) {
+                    std::string text = value();
+                    int pos = position();
+                    int start = pos;
+                    while (start > 0 && text[start-1] != ' ') start--;
+                    std::string prefix = text.substr(start, pos - start);
+                    if (!prefix.empty()) {
+                        if (prefix != irc.completion_prefix) {
+                            irc.completion_prefix = prefix;
+                            irc.completion_index = 0;
+                        }
+                        std::vector<std::string> matches;
+                        for (const auto& nick : irc.nicks) {
+                            if (nick.size() >= prefix.size() &&
+                                strncasecmp(nick.c_str(), prefix.c_str(), prefix.size()) == 0) {
+                                matches.push_back(nick);
+                            }
+                        }
+                        if (!matches.empty()) {
+                            if (irc.completion_index >= (int)matches.size())
+                                irc.completion_index = 0;
+                            std::string new_word = matches[irc.completion_index];
+                            irc.completion_index++;
+                            std::string new_text = text.substr(0, start) + new_word + text.substr(pos);
+                            value(new_text.c_str());
+                            position(start + new_word.size());
+                            return 1;
+                        }
+                    }
+                }
+                // Always eat Tab (prevents accidental sends)
+                return 1;
+            }
+            // ----- Enter key: always trigger send callback -----
+            if (key == FL_Enter || key == FL_KP_Enter) {
+                if (callback()) {
+                    do_callback();
+                }
+                return 1;
+            }
         }
         return Fl_Input::handle(event);
     }
@@ -203,6 +249,10 @@ void join_channel(const char *channel) {
     append_log("*** JOIN sent for %s", channel);
     strncpy(irc.current_channel, channel, sizeof(irc.current_channel)-1);
     irc.current_channel[sizeof(irc.current_channel)-1] = '\0';
+    // Clear nick list; will be repopulated by NAMES reply
+    irc.nicks.clear();
+    irc.completion_prefix = "";
+    irc.completion_index = 0;
 }
 
 void part_channel(const char *channel, const char *reason) {
@@ -215,8 +265,11 @@ void part_channel(const char *channel, const char *reason) {
     else
         send_raw("PART %s", channel);
     append_log("*** Left %s", channel);
-    if (strcmp(channel, irc.current_channel) == 0)
+    if (strcmp(channel, irc.current_channel) == 0) {
         irc.current_channel[0] = '\0';
+        irc.nicks.clear();
+        irc.completion_prefix = "";
+    }
 }
 
 void disconnect(const char *quitmsg) {
@@ -232,6 +285,9 @@ void disconnect(const char *quitmsg) {
     append_log("*** Disconnected");
     irc.current_channel[0] = '\0';
     irc.default_target[0] = '\0';
+    irc.nicks.clear();
+    irc.completion_prefix = "";
+    irc.completion_index = 0;
     irc.history.clear();
     irc.history_pos = -1;
     irc.saved_input.clear();
@@ -255,7 +311,7 @@ static void extract_nick(const char *prefix, char *nick, size_t nick_size) {
 }
 
 // --------------------------------------------------------------
-// Process a complete IRC line (including JOIN, PART, QUIT, NICK)
+// Process a complete IRC line (including JOIN, PART, QUIT, NICK, NAMES)
 // --------------------------------------------------------------
 void process_line(const char *line) {
     // PING
@@ -294,6 +350,40 @@ void process_line(const char *line) {
     strncpy(cmd, cmd_start, cmd_len);
     cmd[cmd_len] = '\0';
 
+    // ----- RPL_NAMREPLY (353) -----
+    if (strcmp(cmd, "353") == 0) {
+        // :server 353 mynick = #channel :nick1 nick2 nick3 ...
+        const char *names_start = strchr(cmd_start + cmd_len, ':');
+        if (names_start) {
+            names_start++; // skip ':'
+            std::string names_str(names_start);
+            size_t pos = 0;
+            while ((pos = names_str.find(' ')) != std::string::npos) {
+                std::string nick = names_str.substr(0, pos);
+                if (!nick.empty()) {
+                    // Remove mode prefixes (@, +, %, ~, &)
+                    if (nick[0] == '@' || nick[0] == '+' || nick[0] == '%' || nick[0] == '~' || nick[0] == '&')
+                        nick = nick.substr(1);
+                    if (std::find(irc.nicks.begin(), irc.nicks.end(), nick) == irc.nicks.end())
+                        irc.nicks.push_back(nick);
+                }
+                names_str.erase(0, pos + 1);
+            }
+            if (!names_str.empty()) {
+                if (names_str[0] == '@' || names_str[0] == '+' || names_str[0] == '%' || names_str[0] == '~' || names_str[0] == '&')
+                    names_str = names_str.substr(1);
+                if (std::find(irc.nicks.begin(), irc.nicks.end(), names_str) == irc.nicks.end())
+                    irc.nicks.push_back(names_str);
+            }
+        }
+        return; // don't print raw numeric
+    }
+
+    // ----- RPL_ENDOFNAMES (366) – nothing to do -----
+    if (strcmp(cmd, "366") == 0) {
+        return; // ignore
+    }
+
     // ----- JOIN -----
     if (strcmp(cmd, "JOIN") == 0) {
         char nick[64];
@@ -303,6 +393,12 @@ void process_line(const char *line) {
         while (*chan_start == ' ') chan_start++;
         if (*chan_start == ':') chan_start++;
         append_log("*** %s has joined %s", nick, chan_start);
+        // Add to nick list if it's our current channel
+        if (strcmp(chan_start, irc.current_channel) == 0) {
+            std::string new_nick(nick);
+            if (std::find(irc.nicks.begin(), irc.nicks.end(), new_nick) == irc.nicks.end())
+                irc.nicks.push_back(new_nick);
+        }
         return;
     }
 
@@ -325,6 +421,12 @@ void process_line(const char *line) {
         } else {
             append_log("*** %s has left %s", nick, channel);
         }
+        // Remove from nick list if it's our current channel
+        if (strcmp(channel, irc.current_channel) == 0) {
+            std::string leaving_nick(nick);
+            auto it = std::find(irc.nicks.begin(), irc.nicks.end(), leaving_nick);
+            if (it != irc.nicks.end()) irc.nicks.erase(it);
+        }
         return;
     }
 
@@ -338,6 +440,10 @@ void process_line(const char *line) {
         } else {
             append_log("*** %s has quit", nick);
         }
+        // Remove from nick list (if present)
+        std::string quitting_nick(nick);
+        auto it = std::find(irc.nicks.begin(), irc.nicks.end(), quitting_nick);
+        if (it != irc.nicks.end()) irc.nicks.erase(it);
         return;
     }
 
@@ -350,6 +456,15 @@ void process_line(const char *line) {
         while (*new_nick_start == ' ') new_nick_start++;
         if (*new_nick_start == ':') new_nick_start++;
         append_log("*** %s is now known as %s", old_nick, new_nick_start);
+        // Update nick list
+        std::string old(old_nick);
+        std::string newn(new_nick_start);
+        auto it = std::find(irc.nicks.begin(), irc.nicks.end(), old);
+        if (it != irc.nicks.end()) {
+            irc.nicks.erase(it);
+            if (std::find(irc.nicks.begin(), irc.nicks.end(), newn) == irc.nicks.end())
+                irc.nicks.push_back(newn);
+        }
         return;
     }
 
@@ -711,6 +826,7 @@ void execute_command(const char *cmdline) {
         append_log("---");
         append_log("Any line not starting with '/' is sent to default target or current channel.");
         append_log("Press Up/Down arrows to cycle through message history.");
+        append_log("Tab completes nicknames in the current channel.");
     }
     else {
         append_log("Unknown command: /%s. Type /help", cmd);
@@ -808,8 +924,11 @@ int main() {
     irc.saved_input.clear();
     irc.connect_attempt = false;
     irc.line_buffer.clear();
+    irc.completion_index = 0;
+    irc.completion_prefix = "";
 
     append_log("*** BIC IRC Client started. Type /help for commands.");
+    append_log("*** Tab completes nicknames in the current channel.");
 
     Fl::run();
 
