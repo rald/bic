@@ -1,5 +1,6 @@
 // BIC - BIC IRC Client (non‑blocking connect, full debug logs)
-// Command trigger: '/' (e.g., /join #channel)
+// Command trigger: '/'
+// Message format: [HH:MM:SS] [#channel] <nick> message  |  [PM] <nick> message  |  * nick action  |  *** system
 // Compile: g++ -std=c++11 -o bic main.cpp -lfltk -lpthread -lX11
 
 #include <stdio.h>
@@ -63,7 +64,7 @@ struct IRCClient {
 
 static IRCClient irc;
 
-// Forward declaration for the timeout function (used in disconnect and connected_callback)
+// Forward declaration for the timeout function
 static void connect_timeout(void*);
 
 // --------------------------------------------------------------
@@ -134,18 +135,15 @@ public:
 };
 
 // --------------------------------------------------------------
-// Timestamp (12‑hour format)
+// Timestamp (24‑hour format, HH:MM:SS)
 // --------------------------------------------------------------
 const char* get_timestamp() {
-    static char time_str[20];
+    static char time_str[10];
     time_t rawtime;
     struct tm *timeinfo;
     time(&rawtime);
     timeinfo = localtime(&rawtime);
-    strftime(time_str, sizeof(time_str), "%I:%M:%S %p", timeinfo);
-    if (time_str[0] == '0') {
-        for (int i = 0; time_str[i]; i++) time_str[i] = time_str[i+1];
-    }
+    strftime(time_str, sizeof(time_str), "%H:%M:%S", timeinfo);
     return time_str;
 }
 
@@ -173,7 +171,7 @@ void append_log(const char *fmt, ...) {
     va_end(ap);
     bool was_at_bottom = at_bottom();
     char final[1100];
-    snprintf(final, sizeof(final), "<%s> %s", get_timestamp(), buffer);
+    snprintf(final, sizeof(final), "[%s] %s", get_timestamp(), buffer);
     irc.logbuf->append(final);
     irc.logbuf->append("\n");
     if (was_at_bottom) {
@@ -243,7 +241,7 @@ void disconnect(const char *quitmsg) {
 }
 
 // --------------------------------------------------------------
-// Process a complete IRC line
+// Process a complete IRC line (with readable formatting)
 // --------------------------------------------------------------
 void process_line(const char *line) {
     if (strncmp(line, "PING", 4) == 0) {
@@ -273,7 +271,6 @@ void process_line(const char *line) {
                     char *colon = strchr(target_end+1, ':');
                     if (colon) {
                         const char *message = colon+1;
-                        // display_privmsg logic
                         char nick[64];
                         const char *bang = strchr(prefix, '!');
                         if (bang) {
@@ -292,14 +289,14 @@ void process_line(const char *line) {
                             char *end = strchr(action_msg, '\x01');
                             if (end) *end = '\0';
                             if (strncmp(action_msg, "ACTION ", 7) == 0) {
-                                append_log("<%s> * <%s> %s", target, nick, action_msg+7);
+                                append_log("* %s %s", nick, action_msg+7);
                                 return;
                             }
                         }
                         if (target[0] == '#')
-                            append_log("<%s> <%s> %s", target, nick, message);
+                            append_log("[%s] <%s> %s", target, nick, message);
                         else
-                            append_log("<%s> <%s> %s", target, nick, message);
+                            append_log("[PM] <%s> %s", nick, message);
                     } else {
                         append_log("%s", line);
                     }
@@ -318,7 +315,7 @@ void process_line(const char *line) {
 }
 
 // --------------------------------------------------------------
-// Socket callback – now with line buffering
+// Socket callback – line buffering
 // --------------------------------------------------------------
 void socket_callback(int fd, void*) {
     char buf[4096];
@@ -329,7 +326,7 @@ void socket_callback(int fd, void*) {
         return;
     }
     buf[n] = '\0';
-    irc.line_buffer += buf;   // append to leftover buffer
+    irc.line_buffer += buf;
 
     size_t pos;
     while ((pos = irc.line_buffer.find("\r\n")) != std::string::npos) {
@@ -340,11 +337,10 @@ void socket_callback(int fd, void*) {
 }
 
 // --------------------------------------------------------------
-// Non‑blocking connect callbacks with debug logs
+// Non‑blocking connect callbacks
 // --------------------------------------------------------------
 static void connected_callback(int fd, void*) {
     if (!irc.connect_attempt) return;
-    // Cancel the timeout regardless of outcome
     Fl::remove_timeout(connect_timeout);
     append_log("*** Connection callback triggered");
     int err = 0;
@@ -473,10 +469,9 @@ int split_args(const char *input, char *out1, char *out2, char *out3) {
 // Command dispatcher (trigger is '/')
 // --------------------------------------------------------------
 void execute_command(const char *cmdline) {
-    // cmdline starts with '/', skip it
     char cmd[32];
     char arg1[128], arg2[128], arg3[128];
-    const char *p = cmdline + 1;
+    const char *p = cmdline + 1; // skip '/'
     int i = 0;
     while (*p && *p != ' ') cmd[i++] = *p++;
     cmd[i] = '\0';
@@ -503,7 +498,7 @@ void execute_command(const char *cmdline) {
             return;
         }
         char channel[128], reason[512] = {0};
-        const char *ptr = cmdline + 5;  // position after "/part"
+        const char *ptr = cmdline + 5; // after "/part"
         while (*ptr == ' ') ptr++;
         int idx = 0;
         while (*ptr && *ptr != ' ' && idx < (int)sizeof(channel)-1) channel[idx++] = *ptr++;
@@ -544,7 +539,7 @@ void execute_command(const char *cmdline) {
             append_log("*** No target set. Use /join, /target, or /msg.");
             return;
         }
-        const char *ptr = cmdline + 4;  // after "/me "
+        const char *ptr = cmdline + 4; // after "/me "
         while (*ptr == ' ') ptr++;
         if (!*ptr) {
             append_log("Usage: /me <action>");
@@ -554,7 +549,7 @@ void execute_command(const char *cmdline) {
         strncpy(action, ptr, sizeof(action)-1);
         action[sizeof(action)-1] = '\0';
         send_raw("PRIVMSG %s :\001ACTION %s\001", target, action);
-        append_log("<%s> * <%s> %s", target, irc.nickname, action);
+        append_log("* %s %s", irc.nickname, action);   // readable action format
     }
     else if (strcmp(cmd, "names") == 0) {
         if (!IS_VALID_SOCKET(irc.sockfd) || irc.connect_attempt) {
@@ -598,7 +593,11 @@ void execute_command(const char *cmdline) {
         strncpy(message, ptr, sizeof(message)-1);
         message[sizeof(message)-1] = '\0';
         send_raw("PRIVMSG %s :%s", arg1, message);
-        append_log("<%s> <%s> %s", arg1, irc.nickname, message);
+        // Show our own outgoing message in readable format
+        if (arg1[0] == '#')
+            append_log("[%s] <%s> %s", arg1, irc.nickname, message);
+        else
+            append_log("[PM] <%s> %s", irc.nickname, message);
     }
     else if (strcmp(cmd, "clear") == 0) {
         irc.logbuf->text("");
@@ -664,7 +663,11 @@ void send_cb(Fl_Widget*, void*) {
                 return;
             }
             send_raw("PRIVMSG %s :%s", target, text);
-            append_log("<%s> <%s> %s", target, irc.nickname, text);
+            // Show outgoing message in readable format
+            if (target[0] == '#')
+                append_log("[%s] <%s> %s", target, irc.nickname, text);
+            else
+                append_log("[PM] <%s> %s", irc.nickname, text);
         }
     }
     irc.msg_input->value("");
