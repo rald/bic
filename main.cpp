@@ -1,6 +1,7 @@
 // BIC - BIC IRC Client (non‑blocking connect, full debug logs)
 // Command trigger: '/'
-// Message format: [HH:MM:SS] [#channel] <nick> message  |  [PM] <nick> message  |  * nick action  |  *** system
+// Message format: [HH:MM:SS] [#channel] <nick> message  |  [PM] <nick> message
+// Actions: * nick action   |  System: *** text   |  Join/Part/Quit: *** nick has joined/left/quit
 // Compile: g++ -std=c++11 -o bic main.cpp -lfltk -lpthread -lX11
 
 #include <stdio.h>
@@ -59,12 +60,11 @@ struct IRCClient {
     int history_pos;
     std::string saved_input;
     bool connect_attempt;
-    std::string line_buffer;   // for reassembling TCP fragments
+    std::string line_buffer;
 };
 
 static IRCClient irc;
 
-// Forward declaration for the timeout function
 static void connect_timeout(void*);
 
 // --------------------------------------------------------------
@@ -181,7 +181,7 @@ void append_log(const char *fmt, ...) {
 }
 
 // --------------------------------------------------------------
-// Send raw IRC message (only after fully connected)
+// Send raw IRC message
 // --------------------------------------------------------------
 void send_raw(const char *fmt, ...) {
     if (!IS_VALID_SOCKET(irc.sockfd) || irc.connect_attempt) return;
@@ -220,7 +220,6 @@ void part_channel(const char *channel, const char *reason) {
 }
 
 void disconnect(const char *quitmsg) {
-    // Always close socket if it exists, regardless of connect_attempt
     if (IS_VALID_SOCKET(irc.sockfd)) {
         if (!irc.connect_attempt && quitmsg && quitmsg[0])
             send_raw("QUIT :%s", quitmsg);
@@ -229,7 +228,6 @@ void disconnect(const char *quitmsg) {
     }
     irc.sockfd = SOCKET_ERROR_VAL;
     irc.connect_attempt = false;
-    // Cancel any pending timeout
     Fl::remove_timeout(connect_timeout);
     append_log("*** Disconnected");
     irc.current_channel[0] = '\0';
@@ -241,77 +239,165 @@ void disconnect(const char *quitmsg) {
 }
 
 // --------------------------------------------------------------
-// Process a complete IRC line (with readable formatting)
+// Helper: extract nick from prefix ":nick!user@host"
+// --------------------------------------------------------------
+static void extract_nick(const char *prefix, char *nick, size_t nick_size) {
+    const char *bang = strchr(prefix, '!');
+    if (bang) {
+        size_t len = bang - prefix;
+        if (len >= nick_size) len = nick_size - 1;
+        strncpy(nick, prefix, len);
+        nick[len] = '\0';
+    } else {
+        strncpy(nick, prefix, nick_size - 1);
+        nick[nick_size - 1] = '\0';
+    }
+}
+
+// --------------------------------------------------------------
+// Process a complete IRC line (including JOIN, PART, QUIT, NICK)
 // --------------------------------------------------------------
 void process_line(const char *line) {
+    // PING
     if (strncmp(line, "PING", 4) == 0) {
         char *pong = strchr(line, ':');
         if (pong) send_raw("PONG :%s", pong+1);
         else send_raw("PONG");
         append_log("%s", line);
+        return;
     }
-    else if (line[0] == ':') {
-        char *prefix_end = strchr(line+1, ' ');
-        if (prefix_end) {
-            char *cmd_start = prefix_end + 1;
-            if (strncmp(cmd_start, "PRIVMSG ", 8) == 0) {
-                char prefix[128];
-                int prefix_len = (int)(prefix_end - line);
-                if (prefix_len >= (int)sizeof(prefix)) prefix_len = sizeof(prefix)-1;
-                strncpy(prefix, line+1, prefix_len);
-                prefix[prefix_len] = '\0';
-                char *target_start = cmd_start + 8;
-                char *target_end = strchr(target_start, ' ');
-                if (target_end) {
-                    char target[64];
-                    int target_len = (int)(target_end - target_start);
-                    if (target_len >= (int)sizeof(target)) target_len = sizeof(target)-1;
-                    strncpy(target, target_start, target_len);
-                    target[target_len] = '\0';
-                    char *colon = strchr(target_end+1, ':');
-                    if (colon) {
-                        const char *message = colon+1;
-                        char nick[64];
-                        const char *bang = strchr(prefix, '!');
-                        if (bang) {
-                            int len = (int)(bang - prefix);
-                            if (len >= (int)sizeof(nick)) len = sizeof(nick)-1;
-                            strncpy(nick, prefix, len);
-                            nick[len] = '\0';
-                        } else {
-                            strcpy(nick, prefix);
-                        }
-                        // CTCP ACTION
-                        if (message[0] == '\x01') {
-                            char action_msg[512];
-                            strncpy(action_msg, message+1, sizeof(action_msg)-1);
-                            action_msg[sizeof(action_msg)-1] = '\0';
-                            char *end = strchr(action_msg, '\x01');
-                            if (end) *end = '\0';
-                            if (strncmp(action_msg, "ACTION ", 7) == 0) {
-                                append_log("* %s %s", nick, action_msg+7);
-                                return;
-                            }
-                        }
-                        if (target[0] == '#')
-                            append_log("[%s] <%s> %s", target, nick, message);
-                        else
-                            append_log("[PM] <%s> %s", nick, message);
-                    } else {
-                        append_log("%s", line);
-                    }
-                } else {
-                    append_log("%s", line);
-                }
-            } else {
-                append_log("%s", line);
-            }
-        } else {
-            append_log("%s", line);
-        }
-    } else {
+
+    // All other messages start with ':'
+    if (line[0] != ':') {
         append_log("%s", line);
+        return;
     }
+
+    // Find prefix end (space after :nick!user@host)
+    const char *prefix_end = strchr(line+1, ' ');
+    if (!prefix_end) {
+        append_log("%s", line);
+        return;
+    }
+
+    char prefix[128];
+    int prefix_len = (int)(prefix_end - line);
+    if (prefix_len >= (int)sizeof(prefix)) prefix_len = sizeof(prefix)-1;
+    strncpy(prefix, line+1, prefix_len);
+    prefix[prefix_len] = '\0';
+
+    const char *cmd_start = prefix_end + 1;
+    // Extract command (up to next space)
+    char cmd[32];
+    int cmd_len = 0;
+    while (cmd_start[cmd_len] && cmd_start[cmd_len] != ' ' && cmd_len < 31) cmd_len++;
+    strncpy(cmd, cmd_start, cmd_len);
+    cmd[cmd_len] = '\0';
+
+    // ----- JOIN -----
+    if (strcmp(cmd, "JOIN") == 0) {
+        char nick[64];
+        extract_nick(prefix, nick, sizeof(nick));
+        // The channel is the last parameter (starts with ':')
+        const char *chan_start = cmd_start + cmd_len;
+        while (*chan_start == ' ') chan_start++;
+        if (*chan_start == ':') chan_start++;
+        append_log("*** %s has joined %s", nick, chan_start);
+        return;
+    }
+
+    // ----- PART -----
+    if (strcmp(cmd, "PART") == 0) {
+        char nick[64];
+        extract_nick(prefix, nick, sizeof(nick));
+        // channel is first argument
+        const char *chan_start = cmd_start + cmd_len;
+        while (*chan_start == ' ') chan_start++;
+        char channel[64];
+        int chan_len = 0;
+        while (chan_start[chan_len] && chan_start[chan_len] != ' ' && chan_len < 63) chan_len++;
+        strncpy(channel, chan_start, chan_len);
+        channel[chan_len] = '\0';
+        // reason (if any) after colon
+        const char *reason_start = strchr(chan_start + chan_len, ':');
+        if (reason_start && reason_start[1]) {
+            append_log("*** %s has left %s (%s)", nick, channel, reason_start+1);
+        } else {
+            append_log("*** %s has left %s", nick, channel);
+        }
+        return;
+    }
+
+    // ----- QUIT -----
+    if (strcmp(cmd, "QUIT") == 0) {
+        char nick[64];
+        extract_nick(prefix, nick, sizeof(nick));
+        const char *reason_start = strchr(cmd_start + cmd_len, ':');
+        if (reason_start && reason_start[1]) {
+            append_log("*** %s has quit (%s)", nick, reason_start+1);
+        } else {
+            append_log("*** %s has quit", nick);
+        }
+        return;
+    }
+
+    // ----- NICK -----
+    if (strcmp(cmd, "NICK") == 0) {
+        char old_nick[64];
+        extract_nick(prefix, old_nick, sizeof(old_nick));
+        const char *new_nick_start = strchr(cmd_start + cmd_len, ':');
+        if (!new_nick_start) new_nick_start = cmd_start + cmd_len;
+        while (*new_nick_start == ' ') new_nick_start++;
+        if (*new_nick_start == ':') new_nick_start++;
+        append_log("*** %s is now known as %s", old_nick, new_nick_start);
+        return;
+    }
+
+    // ----- PRIVMSG -----
+    if (strcmp(cmd, "PRIVMSG") == 0) {
+        char nick[64];
+        extract_nick(prefix, nick, sizeof(nick));
+        // Find target (channel or nick)
+        const char *target_start = cmd_start + cmd_len;
+        while (*target_start == ' ') target_start++;
+        const char *target_end = strchr(target_start, ' ');
+        if (!target_end) {
+            append_log("%s", line);
+            return;
+        }
+        char target[64];
+        int target_len = (int)(target_end - target_start);
+        if (target_len >= (int)sizeof(target)) target_len = sizeof(target)-1;
+        strncpy(target, target_start, target_len);
+        target[target_len] = '\0';
+        // Message after colon
+        const char *colon = strchr(target_end+1, ':');
+        if (!colon) {
+            append_log("%s", line);
+            return;
+        }
+        const char *message = colon+1;
+        // CTCP ACTION
+        if (message[0] == '\x01') {
+            char action_msg[512];
+            strncpy(action_msg, message+1, sizeof(action_msg)-1);
+            action_msg[sizeof(action_msg)-1] = '\0';
+            char *end = strchr(action_msg, '\x01');
+            if (end) *end = '\0';
+            if (strncmp(action_msg, "ACTION ", 7) == 0) {
+                append_log("* %s %s", nick, action_msg+7);
+                return;
+            }
+        }
+        if (target[0] == '#')
+            append_log("[%s] <%s> %s", target, nick, message);
+        else
+            append_log("[PM] <%s> %s", nick, message);
+        return;
+    }
+
+    // ----- Everything else (raw) -----
+    append_log("%s", line);
 }
 
 // --------------------------------------------------------------
@@ -355,7 +441,6 @@ static void connected_callback(int fd, void*) {
         disconnect(NULL);
         return;
     }
-    // Connection successful
     Fl::remove_fd(fd);
     Fl::add_fd(fd, FL_READ, socket_callback);
     irc.sockfd = fd;
@@ -466,12 +551,12 @@ int split_args(const char *input, char *out1, char *out2, char *out3) {
 }
 
 // --------------------------------------------------------------
-// Command dispatcher (trigger is '/')
+// Command dispatcher
 // --------------------------------------------------------------
 void execute_command(const char *cmdline) {
     char cmd[32];
     char arg1[128], arg2[128], arg3[128];
-    const char *p = cmdline + 1; // skip '/'
+    const char *p = cmdline + 1;
     int i = 0;
     while (*p && *p != ' ') cmd[i++] = *p++;
     cmd[i] = '\0';
@@ -498,7 +583,7 @@ void execute_command(const char *cmdline) {
             return;
         }
         char channel[128], reason[512] = {0};
-        const char *ptr = cmdline + 5; // after "/part"
+        const char *ptr = cmdline + 5;
         while (*ptr == ' ') ptr++;
         int idx = 0;
         while (*ptr && *ptr != ' ' && idx < (int)sizeof(channel)-1) channel[idx++] = *ptr++;
@@ -539,7 +624,7 @@ void execute_command(const char *cmdline) {
             append_log("*** No target set. Use /join, /target, or /msg.");
             return;
         }
-        const char *ptr = cmdline + 4; // after "/me "
+        const char *ptr = cmdline + 4;
         while (*ptr == ' ') ptr++;
         if (!*ptr) {
             append_log("Usage: /me <action>");
@@ -549,7 +634,7 @@ void execute_command(const char *cmdline) {
         strncpy(action, ptr, sizeof(action)-1);
         action[sizeof(action)-1] = '\0';
         send_raw("PRIVMSG %s :\001ACTION %s\001", target, action);
-        append_log("* %s %s", irc.nickname, action);   // readable action format
+        append_log("* %s %s", irc.nickname, action);
     }
     else if (strcmp(cmd, "names") == 0) {
         if (!IS_VALID_SOCKET(irc.sockfd) || irc.connect_attempt) {
@@ -593,7 +678,6 @@ void execute_command(const char *cmdline) {
         strncpy(message, ptr, sizeof(message)-1);
         message[sizeof(message)-1] = '\0';
         send_raw("PRIVMSG %s :%s", arg1, message);
-        // Show our own outgoing message in readable format
         if (arg1[0] == '#')
             append_log("[%s] <%s> %s", arg1, irc.nickname, message);
         else
@@ -616,7 +700,7 @@ void execute_command(const char *cmdline) {
         append_log("/part [channel] [reason]         -- leave a channel (default: current)");
         append_log("/target [target]                 -- set default target for non‑command lines");
         append_log("/names <channel>                 -- list nicks in a channel");
-        append_log("/list [pattern]                  -- list channels matching pattern (or all)");
+        append_log("/list [pattern]                  -- list channels (not always supported)");
         append_log("/nick <newnick>                  -- change your nickname");
         append_log("/msg <target> <text>             -- send private message to target");
         append_log("/me <action>                     -- send CTCP ACTION (/me) to current target");
@@ -663,7 +747,6 @@ void send_cb(Fl_Widget*, void*) {
                 return;
             }
             send_raw("PRIVMSG %s :%s", target, text);
-            // Show outgoing message in readable format
             if (target[0] == '#')
                 append_log("[%s] <%s> %s", target, irc.nickname, text);
             else
@@ -675,7 +758,7 @@ void send_cb(Fl_Widget*, void*) {
 }
 
 // --------------------------------------------------------------
-// Theme: light green on black, monospace, default button
+// Theme: light green on black, monospace
 // --------------------------------------------------------------
 void apply_theme(Fl_Window *win, Fl_Text_Display *disp, Fl_Input *inp, Fl_Button *btn) {
     win->color(FL_BLACK);
