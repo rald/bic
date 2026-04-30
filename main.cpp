@@ -1,6 +1,5 @@
 // BIC - BIC IRC Client (non‑blocking connect, full debug logs)
-// Compile: g++ -std=c++11 -o bic bic.cpp -lfltk -lpthread -lX11
-// Windows:  g++ -std=c++11 -o bic.exe bic.cpp -lfltk -lws2_32
+// Compile: g++ -std=c++11 -o bic main.cpp -lfltk -lpthread -lX11
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,47 +18,29 @@
 #include <FL/fl_ask.H>
 
 // --------------------------------------------------------------
-// Platform-specific socket headers and helpers
+// Linux socket headers and helpers
 // --------------------------------------------------------------
-#ifdef _WIN32
-    #define WIN32_LEAN_AND_MEAN
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #include <io.h>
-    typedef int socklen_t;
-    #define CLOSE_SOCKET(s) closesocket(s)
-    #define GET_ERROR() WSAGetLastError()
-    #define IS_VALID_SOCKET(s) ((s) != INVALID_SOCKET)
-    #define SOCKET_ERROR_VAL INVALID_SOCKET
-    static const char* socket_strerror(int err) {
-        static char buf[256];
-        snprintf(buf, sizeof(buf), "Winsock error %d", err);
-        return buf;
-    }
-    static void set_nonblocking(int fd) {
-        u_long mode = 1;
-        ioctlsocket(fd, FIONBIO, &mode);
-    }
-#else
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <arpa/inet.h>
-    #include <netdb.h>
-    #include <unistd.h>
-    #include <errno.h>
-    #include <fcntl.h>
-    #define CLOSE_SOCKET(s) close(s)
-    #define GET_ERROR() errno
-    #define IS_VALID_SOCKET(s) ((s) >= 0)
-    #define SOCKET_ERROR_VAL (-1)
-    static const char* socket_strerror(int err) {
-        return strerror(err);
-    }
-    static void set_nonblocking(int fd) {
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    }
-#endif
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+
+#define CLOSE_SOCKET(s) close(s)
+#define GET_ERROR() errno
+#define IS_VALID_SOCKET(s) ((s) >= 0)
+#define SOCKET_ERROR_VAL (-1)
+
+static const char* socket_strerror(int err) {
+    return strerror(err);
+}
+
+static void set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
 
 // --------------------------------------------------------------
 // IRC client state
@@ -207,11 +188,7 @@ void send_raw(const char *fmt, ...) {
     vsnprintf(buffer, sizeof(buffer), fmt, ap);
     va_end(ap);
     strcat(buffer, "\r\n");
-#ifdef _WIN32
-    send(irc.sockfd, buffer, (int)strlen(buffer), 0);
-#else
     send(irc.sockfd, buffer, strlen(buffer), 0);
-#endif
 }
 
 // --------------------------------------------------------------
@@ -360,19 +337,11 @@ static void connected_callback(int fd, void*) {
     append_log("*** Connection callback triggered");
     int err = 0;
     socklen_t len = sizeof(err);
-#ifdef _WIN32
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&err, &len) != 0) {
-        append_log("*** getsockopt error: cannot get connection status");
-        disconnect(NULL);
-        return;
-    }
-#else
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) {
         append_log("*** getsockopt error: %s", strerror(errno));
         disconnect(NULL);
         return;
     }
-#endif
     if (err != 0) {
         append_log("*** Connection failed: %s", socket_strerror(err));
         disconnect(NULL);
@@ -432,18 +401,10 @@ void connect_to_server(const char *server, int port, const char *nick) {
             append_log("*** Connected immediately (unusual)");
             break;
         }
-#ifdef _WIN32
-        int errcode = WSAGetLastError();
-        if (errcode == WSAEWOULDBLOCK) {
-            append_log("*** Connect in progress (WSAEWOULDBLOCK)");
-            break;
-        }
-#else
         if (errno == EINPROGRESS) {
             append_log("*** Connect in progress (EINPROGRESS)");
             break;
         }
-#endif
         append_log("*** Connect failed immediately: %s", socket_strerror(GET_ERROR()));
         CLOSE_SOCKET(sock);
         sock = SOCKET_ERROR_VAL;
@@ -626,6 +587,13 @@ void execute_command(const char *cmdline) {
         send_raw("PRIVMSG %s :%s", arg1, message);
         append_log("<%s> <%s> %s", arg1, irc.nickname, message);
     }
+    else if (strcmp(cmd, "clear") == 0) {
+        irc.logbuf->text("");
+        append_log("*** Display cleared");
+    }
+    else if (strcmp(cmd, "disconnect") == 0) {
+        disconnect(argc >= 1 ? arg1 : NULL);
+    }
     else if (strcmp(cmd, "quit") == 0) {
         disconnect(argc >= 1 ? arg1 : NULL);
     }
@@ -640,7 +608,9 @@ void execute_command(const char *cmdline) {
         append_log(".nick <newnick>                  -- change your nickname");
         append_log(".msg <target> <text>             -- send private message to target");
         append_log(".me <action>                     -- send CTCP ACTION (/me) to current target");
-        append_log(".quit [message]                  -- disconnect from server (optional quit message)");
+        append_log(".clear                           -- clear the chat display");
+        append_log(".disconnect [message]            -- disconnect from server");
+        append_log(".quit [message]                  -- disconnect from server (alias)");
         append_log(".help                            -- show this help");
         append_log("---");
         append_log("Any line not starting with '.' is sent to default target or current channel.");
@@ -709,14 +679,6 @@ void apply_theme(Fl_Window *win, Fl_Text_Display *disp, Fl_Input *inp, Fl_Button
 // Main
 // --------------------------------------------------------------
 int main() {
-#ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        fl_alert("Failed to initialise Winsock");
-        return 1;
-    }
-#endif
-
     Fl_Window *win = new Fl_Window(600, 450, "BIC - BIC IRC Client");
     win->begin();
 
@@ -753,10 +715,6 @@ int main() {
     Fl::run();
 
     if (IS_VALID_SOCKET(irc.sockfd) || irc.connect_attempt) disconnect(NULL);
-
-#ifdef _WIN32
-    WSACleanup();
-#endif
 
     return 0;
 }
