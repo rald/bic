@@ -464,27 +464,41 @@ void IRCModel::processLine(const std::string& line) {
                 case 321: // RPL_LISTSTART
                     if (controller_) controller_->onServerMessage("Channel list:");
                     break;
-                case 322: // RPL_LIST – format: <channel> <#visible> :<topic>
+
+                case 322: // RPL_LIST – format: <nick> <channel> <#visible> :<topic>
                     if (controller_) {
+                        // params = "mynick #channel 5 :topic"
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
                             size_t second = params.find(' ', first + 1);
                             if (second != std::string::npos) {
-                                std::string channel = params.substr(0, first);
-                                std::string visible = params.substr(first + 1, second - first - 1);
-                                size_t colon = params.find(':', second);
-                                std::string topic = (colon != std::string::npos) ? params.substr(colon + 1) : "";
-                                controller_->onServerMessage(channel + " (" + visible + " users) – " + topic);
+                                size_t third = params.find(' ', second + 1);
+                                if (third != std::string::npos) {
+                                    std::string channel = params.substr(first + 1, second - first - 1);
+                                    std::string users = params.substr(second + 1, third - second - 1);
+                                    size_t colon = params.find(':', third);
+                                    std::string topic = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                                    controller_->onServerMessage(channel + " (" + users + " users) – " + topic);
+                                    break;
+                                }
                             }
                         }
+                        // Fallback: show raw line if parsing fails
+                        controller_->onServerMessage("(LIST) " + msg);
                     }
                     break;
+
                 case 323: // RPL_LISTEND
                     if (controller_) controller_->onServerMessage("End of channel list.");
                     break;
-
-                default: break;
-            }
+    
+                default:
+                    // Show any other numeric reply (errors, info, etc.)
+                    if (controller_) {
+                        std::string fullMsg = "[" + cmd + "] " + msg;
+                        controller_->onServerMessage(fullMsg);
+                    }
+                    break;            }
         }
         return;
     }
