@@ -279,48 +279,42 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         model_->disconnect(arg1);
     }
     else if (cmd == "topic") {
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+
         std::string channel, newTopic;
-        // If no argument, use current channel (if any)
-        if (arg1.empty()) {
+        size_t firstSpace = rest.find(' ');
+
+        // If no arguments, use current channel (if any)
+        if (rest.empty()) {
             channel = model_->getCurrentChannel();
             if (channel.empty()) {
                 view_->appendMessage("*** No current channel. Use /topic #channel or /target first.");
                 return;
             }
-        } else {
-            // First argument may be a channel. If it starts with '#', treat as channel.
-            if (arg1[0] == '#') {
-                channel = arg1;
-                // The rest (arg2 + arg3) becomes the topic, but we need the full remaining text.
-                // Better to reconstruct from original rest string.
-                size_t firstSpace = rest.find(' ');
-                if (firstSpace != std::string::npos) {
-                    size_t secondSpace = rest.find(' ', firstSpace + 1);
-                    if (secondSpace != std::string::npos) {
-                        newTopic = rest.substr(secondSpace + 1);
-                    } else {
-                        // only channel given, no topic -> query
-                        newTopic.clear();
-                    }
-                } else {
-                    // only channel given
-                    newTopic.clear();
+            model_->sendTopic(channel, "");   // query only
+        }
+        else {
+            // Check if the first word looks like a channel
+            std::string firstWord = rest.substr(0, firstSpace);
+            if (firstWord[0] == '#') {
+                channel = firstWord;
+                if (firstSpace != std::string::npos && firstSpace + 1 < rest.size()) {
+                    newTopic = rest.substr(firstSpace + 1);
                 }
             } else {
-                // No channel given, assume current channel, and the whole rest is the new topic
+                // No channel given – use current channel
                 channel = model_->getCurrentChannel();
                 if (channel.empty()) {
                     view_->appendMessage("*** No current channel. Use /topic #channel or /target first.");
                     return;
                 }
-                newTopic = rest;
+                newTopic = rest;   // entire rest is the new topic
             }
+            model_->sendTopic(channel, newTopic);
         }
-        if (!model_->isConnected()) {
-            view_->appendMessage("*** Not connected.");
-            return;
-        }
-        model_->sendTopic(channel, newTopic);
     }
     else if (cmd == "help") {
         view_->appendMessage("--- BIC IRC Client Commands ---");

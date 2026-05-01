@@ -532,45 +532,54 @@ void IRCModel::processLine(const std::string& line) {
                     if (controller_) controller_->onServerMessage("End of channel list.");
                     break;
     
-
-                case 331:   // RPL_NOTOPIC
+                case 331:   // RPL_NOTOPIC  (format: "yournick #channel :No topic is set")
                 {
-                    // params: <channel> :No topic is set
-                    size_t first = params.find(' ');
-                    if (first != std::string::npos) {
-                        std::string channel = params.substr(0, first);
+                    // Split params by spaces
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    
+                    if (tokens.size() >= 2) {
+                        std::string channel = tokens[1];          // second token is the real channel
                         controller_->onServerMessage("No topic set for " + channel);
                     }
                 }
                 break;
 
-                case 332:   // RPL_TOPIC
+                case 332:   // RPL_TOPIC   (format: "yournick #channel :the actual topic")
                 {
-                    // params: <channel> :<topic>
-                    size_t first = params.find(' ');
-                    if (first != std::string::npos) {
-                        std::string channel = params.substr(0, first);
-                        size_t colon = params.find(':');
-                        if (colon != std::string::npos) {
-                            std::string topic = params.substr(colon + 1);
-                            controller_->onServerMessage("Topic of " + channel + ": " + topic);
-                        }
+                    size_t firstSpace = params.find(' ');
+                    if (firstSpace == std::string::npos) break;
+                    
+                    size_t secondSpace = params.find(' ', firstSpace + 1);
+                    std::string channel;
+                    if (secondSpace != std::string::npos) {
+                        channel = params.substr(firstSpace + 1, secondSpace - firstSpace - 1);
+                    } else {
+                        // fallback – unlikely
+                        channel = params.substr(firstSpace + 1);
                     }
+                    
+                    size_t colon = params.find(':');
+                    std::string topic = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                    
+                    controller_->onServerMessage("Topic of " + channel + ": " + topic);
                 }
                 break;
 
-                case 333:   // RPL_TOPICWHOTIME (optional)
+                case 333:   // RPL_TOPICWHOTIME (format: "yournick #channel who time")
                 {
-                    // params: <channel> <who> <time>
-                    size_t first = params.find(' ');
-                    if (first != std::string::npos) {
-                        size_t second = params.find(' ', first + 1);
-                        if (second != std::string::npos) {
-                            std::string channel = params.substr(0, first);
-                            std::string who = params.substr(first + 1, second - first - 1);
-                            std::string timeStr = params.substr(second + 1);
-                            controller_->onServerMessage("Topic set by " + who + " at " + timeStr);
-                        }
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    
+                    if (tokens.size() >= 4) {
+                        std::string channel = tokens[1];
+                        std::string who = tokens[2];
+                        std::string timeStr = tokens[3];
+                        controller_->onServerMessage("Topic set by " + who + " at " + timeStr);
                     }
                 }
                 break;
