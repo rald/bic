@@ -120,7 +120,10 @@ IRCView::IRCView() {
     logdisp_->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
     input_ = new HistoryInput(0, 420, 520, 30, "");
+    input_->when(FL_WHEN_ENTER_KEY);               // Explicit: only Enter triggers callback
     sendBtn_ = new Fl_Button(520, 420, 80, 30, "Send");
+
+    sendBtn_->visible_focus(0);                    // Prevents button from taking keyboard focus
 
     window_->resizable(logdisp_);
     window_->end();
@@ -136,6 +139,7 @@ IRCView::IRCView() {
     input_->textcolor(FL_GREEN);
     input_->cursor_color(FL_GREEN);
     input_->textfont(FL_COURIER);
+
 }
 
 IRCView::~IRCView() {
