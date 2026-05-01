@@ -164,7 +164,19 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             else view_->appendMessage("*** Default target: " + cur);
         } else {
             model_->setDefaultTarget(arg1);
-            view_->appendMessage("*** Default target set to " + arg1);
+            if (arg1[0] == '#') {
+                // Switch channel context and fetch nick list for completion
+                model_->setCurrentChannel(arg1);
+                if (model_->isConnected())
+                    model_->requestNames(arg1);
+                view_->appendMessage("*** Default target set to " + arg1 +
+                                     (model_->isConnected() ? " (fetching nicknames)" : ""));
+            } else {
+                // For PM targets, clear channel context → no nick completion
+                model_->setCurrentChannel("");
+                view_->appendMessage("*** Default target set to " + arg1 +
+                                     " (nick completion disabled for PM)");
+            }
         }
     }
     else if (cmd == "me") {
@@ -304,6 +316,8 @@ void IRCController::onJoin(const std::string& nick, const std::string& channel) 
     view_->appendMessage("*** " + nick + " has joined " + channel);
     if (nick == model_->getNickname()) {
         updateNickCompletionList();
+        model_->setDefaultTarget(channel);
+        view_->appendMessage("*** Default target set to " + channel);
     }
 }
 

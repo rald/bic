@@ -473,3 +473,8 @@ void IRCModel::extractNickFromPrefix(const std::string& prefix, std::string& nic
     else
         nick = prefix;
 }
+
+void IRCModel::setCurrentChannel(const std::string& channel) {
+    currentChannel_ = channel;
+    nicks_.clear();   // stale nick list no longer valid
+}

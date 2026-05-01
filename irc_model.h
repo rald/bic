@@ -34,6 +34,9 @@ public:
 
     void onSocketReady();
 
+    // inside class IRCModel, public section
+    void setCurrentChannel(const std::string& channel);
+
 private:
     void processLine(const std::string& line);
     void extractNickFromPrefix(const std::string& prefix, std::string& nick) const;
