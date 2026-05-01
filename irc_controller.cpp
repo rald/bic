@@ -183,49 +183,37 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             return;
         }
         if (rest.empty()) {
-            view_->appendMessage("Usage: /me [target] <action>");
+            view_->appendMessage("Usage: /me <target> <action>");
             return;
         }
 
-        std::string target;
-        std::string action;
-
-        // Try to split: first word is target iff there is more than one word
+        std::string target, action;
         size_t firstSpace = rest.find(' ');
-        if (firstSpace != std::string::npos) {
-            target = rest.substr(0, firstSpace);
-            action = rest.substr(firstSpace + 1);
-            // Trim leading/trailing spaces from action (just in case)
-            size_t start = action.find_first_not_of(" \t");
-            if (start != std::string::npos)
-                action = action.substr(start);
-            else
-                action.clear();
-        } else {
-            target.clear();
-            action = rest;
+        if (firstSpace == std::string::npos) {
+            view_->appendMessage("Usage: /me <target> <action>");
+            return;
         }
 
-        // If no explicit target, use default (current channel or /target)
-        if (target.empty()) {
-            target = model_->getDefaultTarget();
-            if (target.empty())
-                target = model_->getCurrentChannel();
-            if (target.empty()) {
-                view_->appendMessage("*** No target set. Use /target or specify target with /me <target> <action>");
-                return;
-            }
-        }
+        target = rest.substr(0, firstSpace);
+        action = rest.substr(firstSpace + 1);
 
-        if (action.empty()) {
-            view_->appendMessage("Usage: /me [target] <action>");
+        // Trim leading/trailing spaces from action
+        size_t start = action.find_first_not_of(" \t");
+        if (start != std::string::npos)
+            action = action.substr(start);
+        else
+            action.clear();
+
+        if (target.empty() || action.empty()) {
+            view_->appendMessage("Usage: /me <target> <action>");
             return;
         }
 
         model_->sendAction(target, action);
-        // Display the action locally
-        if (target == model_->getDefaultTarget() || target == model_->getCurrentChannel())
-            view_->appendMessage("* " + model_->getNickname() + " " + action);
+
+        // Display the action locally – always show target
+        if (target[0] == '#')
+            view_->appendMessage("* " + model_->getNickname() + " " + action + " (in " + target + ")");
         else
             view_->appendMessage("* " + model_->getNickname() + " " + action + " (to " + target + ")");
     }
@@ -300,7 +288,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         view_->appendMessage("/list [pattern]                  -- list channels");
         view_->appendMessage("/nick <newnick>                  -- change your nickname");
         view_->appendMessage("/msg <target> <text>             -- send private message");
-        view_->appendMessage("/me [target] <action>            -- send CTCP ACTION (default target is used if omitted)");
+        view_->appendMessage("/me <target> <action>            -- send CTCP ACTION to a channel or nickname");
         view_->appendMessage("/whois <nick>                    -- get information about a user");
         view_->appendMessage("/ctcp <target> <command> [args]  -- send a CTCP request (e.g. VERSION, PING, TIME)");
         view_->appendMessage("/clear                           -- clear chat display");
