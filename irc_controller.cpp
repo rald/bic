@@ -9,6 +9,7 @@
 #include <cctype>
 #include <algorithm>
 #include <strings.h>   // for strncasecmp (POSIX)
+#include <ctime>
 
 IRCController::IRCController()
     : model_(new IRCModel())
@@ -78,7 +79,6 @@ void IRCController::sendCallbackStatic(Fl_Widget*, void* data) {
 void IRCController::onSendCommand(const std::string& input) {
     if (input.empty()) return;
 
-    // avoid duplicate history entries
     if (history_.empty() || history_.back() != input) {
         history_.push_back(input);
         if (history_.size() > 100) history_.erase(history_.begin());
@@ -165,14 +165,12 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         } else {
             model_->setDefaultTarget(arg1);
             if (arg1[0] == '#') {
-                // Switch channel context and fetch nick list for completion
                 model_->setCurrentChannel(arg1);
                 if (model_->isConnected())
                     model_->requestNames(arg1);
                 view_->appendMessage("*** Default target set to " + arg1 +
                                      (model_->isConnected() ? " (fetching nicknames)" : ""));
             } else {
-                // For PM targets, clear channel context → no nick completion
                 model_->setCurrentChannel("");
                 view_->appendMessage("*** Default target set to " + arg1 +
                                      " (nick completion disabled for PM)");
@@ -180,14 +178,56 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         }
     }
     else if (cmd == "me") {
-        if (!model_->isConnected()) { view_->appendMessage("*** Not connected."); return; }
-        std::string target = model_->getDefaultTarget();
-        if (target.empty()) target = model_->getCurrentChannel();
-        if (target.empty()) { view_->appendMessage("*** No target set."); return; }
-        if (arg1.empty()) { view_->appendMessage("Usage: /me <action>"); return; }
-        std::string action = rest;
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+        if (rest.empty()) {
+            view_->appendMessage("Usage: /me [target] <action>");
+            return;
+        }
+
+        std::string target;
+        std::string action;
+
+        // Try to split: first word is target iff there is more than one word
+        size_t firstSpace = rest.find(' ');
+        if (firstSpace != std::string::npos) {
+            target = rest.substr(0, firstSpace);
+            action = rest.substr(firstSpace + 1);
+            // Trim leading/trailing spaces from action (just in case)
+            size_t start = action.find_first_not_of(" \t");
+            if (start != std::string::npos)
+                action = action.substr(start);
+            else
+                action.clear();
+        } else {
+            target.clear();
+            action = rest;
+        }
+
+        // If no explicit target, use default (current channel or /target)
+        if (target.empty()) {
+            target = model_->getDefaultTarget();
+            if (target.empty())
+                target = model_->getCurrentChannel();
+            if (target.empty()) {
+                view_->appendMessage("*** No target set. Use /target or specify target with /me <target> <action>");
+                return;
+            }
+        }
+
+        if (action.empty()) {
+            view_->appendMessage("Usage: /me [target] <action>");
+            return;
+        }
+
         model_->sendAction(target, action);
-        view_->appendMessage("* " + model_->getNickname() + " " + action);
+        // Display the action locally
+        if (target == model_->getDefaultTarget() || target == model_->getCurrentChannel())
+            view_->appendMessage("* " + model_->getNickname() + " " + action);
+        else
+            view_->appendMessage("* " + model_->getNickname() + " " + action + " (to " + target + ")");
     }
     else if (cmd == "names") {
         if (arg1.empty()) { view_->appendMessage("Usage: /names <channel>"); return; }
@@ -206,7 +246,6 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             view_->appendMessage("Usage: /msg <target> <message>");
             return;
         }
-        // Fixed: extract message safely, preserving spaces
         size_t msgStart = rest.find_first_not_of(' ', arg1.size());
         std::string message = (msgStart != std::string::npos) ? rest.substr(msgStart) : "";
         model_->sendPrivmsg(arg1, message);
@@ -227,6 +266,23 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         }
         model_->sendWhois(arg1);
     }
+    else if (cmd == "ctcp") {
+        // /ctcp <target> <command> [arguments]
+        if (arg1.empty() || arg2.empty()) {
+            view_->appendMessage("Usage: /ctcp <target> <command> [arguments]");
+            return;
+        }
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+        // The remaining text after <target> and <command> are arguments
+        size_t cmdStart = rest.find_first_not_of(' ', arg1.size());
+        size_t argsStart = rest.find_first_not_of(' ', cmdStart + arg2.size() + 1);
+        std::string args = (argsStart != std::string::npos) ? rest.substr(argsStart) : "";
+        model_->sendCtcp(arg1, arg2, args);
+        view_->appendMessage("[CTCP] Sent " + arg2 + " to " + arg1);
+    }
     else if (cmd == "clear") {
         view_->clearDisplay();
         view_->appendMessage("*** Display cleared");
@@ -244,8 +300,9 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         view_->appendMessage("/list [pattern]                  -- list channels");
         view_->appendMessage("/nick <newnick>                  -- change your nickname");
         view_->appendMessage("/msg <target> <text>             -- send private message");
-        view_->appendMessage("/me <action>                     -- send CTCP ACTION");
+        view_->appendMessage("/me [target] <action>            -- send CTCP ACTION (default target is used if omitted)");
         view_->appendMessage("/whois <nick>                    -- get information about a user");
+        view_->appendMessage("/ctcp <target> <command> [args]  -- send a CTCP request (e.g. VERSION, PING, TIME)");
         view_->appendMessage("/clear                           -- clear chat display");
         view_->appendMessage("/disconnect [message]            -- disconnect from server");
         view_->appendMessage("/quit [message]                  -- alias for disconnect");
@@ -405,4 +462,47 @@ void IRCController::onMotdEnd() {
 
 void IRCController::onServerMessage(const std::string& msg) {
     view_->appendMessage("*** " + msg);
+}
+
+void IRCController::onNotice(const std::string& from, const std::string& msg) {
+    view_->appendMessage("[NOTICE from " + from + "] " + msg);
+}
+
+void IRCController::onCtcpRequest(const std::string& from, const std::string& /*target*/, const std::string& command, const std::string& args) {
+    view_->appendMessage("[CTCP] Request from " + from + ": " + command + (args.empty() ? "" : " " + args));
+    // Auto-reply to common CTCP commands
+    sendCtcpReplyAuto(from, command, args);
+}
+
+void IRCController::onCtcpReply(const std::string& from, const std::string& command, const std::string& args) {
+    view_->appendMessage("[CTCP reply from " + from + "] " + command + (args.empty() ? "" : ": " + args));
+}
+
+void IRCController::sendCtcpReplyAuto(const std::string& target, const std::string& command, const std::string& args) {
+    // We only reply to certain CTCP requests, and only if we are connected.
+    if (!model_->isConnected()) return;
+
+    std::string cmd = command;
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
+
+    if (cmd == "VERSION") {
+        model_->sendCtcpReply(target, "VERSION", "BIC IRC Client v1.0 / FLTK");
+    }
+    else if (cmd == "TIME") {
+        time_t now = time(nullptr);
+        std::string timestr = ctime(&now);
+        timestr.pop_back(); // remove newline
+        model_->sendCtcpReply(target, "TIME", timestr);
+    }
+    else if (cmd == "USERINFO") {
+        model_->sendCtcpReply(target, "USERINFO", "BIC IRC Client user");
+    }
+    else if (cmd == "CLIENTINFO") {
+        model_->sendCtcpReply(target, "CLIENTINFO", "VERSION TIME USERINFO CLIENTINFO PING");
+    }
+    else if (cmd == "PING") {
+        // Reply with the same argument (ping value)
+        model_->sendCtcpReply(target, "PING", args);
+    }
+    // For other CTCP commands, we ignore.
 }

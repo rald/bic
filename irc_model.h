@@ -21,6 +21,8 @@ public:
     void sendRaw(const std::string& msg);
     void sendPrivmsg(const std::string& target, const std::string& msg);
     void sendAction(const std::string& target, const std::string& action);
+    void sendCtcp(const std::string& target, const std::string& command, const std::string& args = "");
+    void sendCtcpReply(const std::string& target, const std::string& command, const std::string& args = "");
     void joinChannel(const std::string& channel, const std::string& key = "");
     void partChannel(const std::string& channel, const std::string& reason = "");
     void changeNick(const std::string& newnick);
@@ -33,10 +35,7 @@ public:
     const std::vector<std::string>& getNicks() const;
 
     void onSocketReady();
-
-    // inside class IRCModel, public section
     void setCurrentChannel(const std::string& channel);
-
     void sendWhois(const std::string& nick);
 
 private:
@@ -44,8 +43,9 @@ private:
     void extractNickFromPrefix(const std::string& prefix, std::string& nick) const;
     void startNonBlockingConnect(int sockfd);
     void feedRecvData(const char* buf, int len);
+    bool parseCtcpMessage(const std::string& msg, std::string& cmd, std::string& args) const;
 
-    static void connectTimeoutCallback(void* data);   // static timeout handler
+    static void connectTimeoutCallback(void* data);
 
     int sockfd_;
     bool connectAttempt_;

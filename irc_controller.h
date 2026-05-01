@@ -11,7 +11,7 @@ class IRCView;
 class IRCController {
 public:
     IRCController();
-    ~IRCController();                           // FIX: destructor
+    ~IRCController();
     void run();
 
     void onSendCommand(const std::string& input);
@@ -40,10 +40,14 @@ public:
     void onError(const std::string& error);
     void onMotdEnd();
     void onServerMessage(const std::string& msg);
+    void onNotice(const std::string& from, const std::string& msg);
+    void onCtcpRequest(const std::string& from, const std::string& target, const std::string& command, const std::string& args);
+    void onCtcpReply(const std::string& from, const std::string& command, const std::string& args);
 
 private:
     void executeCommand(const std::string& cmdLine);
     void updateNickCompletionList();
+    void sendCtcpReplyAuto(const std::string& target, const std::string& command, const std::string& args);
 
     static void sendCallbackStatic(Fl_Widget* w, void* data);
 

@@ -81,6 +81,20 @@ void IRCModel::sendAction(const std::string& target, const std::string& action) 
     sendRaw("PRIVMSG " + target + " :\001ACTION " + sanitizeMessage(action) + "\001");
 }
 
+void IRCModel::sendCtcp(const std::string& target, const std::string& command, const std::string& args) {
+    std::string ctcp = "\001" + command;
+    if (!args.empty()) ctcp += " " + sanitizeMessage(args);
+    ctcp += "\001";
+    sendRaw("PRIVMSG " + target + " :" + ctcp);
+}
+
+void IRCModel::sendCtcpReply(const std::string& target, const std::string& command, const std::string& args) {
+    std::string ctcp = "\001" + command;
+    if (!args.empty()) ctcp += " " + sanitizeMessage(args);
+    ctcp += "\001";
+    sendRaw("NOTICE " + target + " :" + ctcp);
+}
+
 void IRCModel::joinChannel(const std::string& channel, const std::string& key) {
     if (key.empty())
         sendRaw("JOIN " + channel);
@@ -134,7 +148,6 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
         return;
     }
 
-    // Remove any previous timeout (e.g., from a previous failed attempt)
     Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
 
     nickname_ = nick;
@@ -245,7 +258,7 @@ void IRCModel::onSocketReady() {
     char buf[4096];
     int n = recv(sockfd_, buf, sizeof(buf)-1, 0);
     if (n == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return; // no data yet
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
         disconnect();
         return;
     }
@@ -275,6 +288,21 @@ void IRCModel::feedRecvData(const char* data, int len) {
     }
 }
 
+bool IRCModel::parseCtcpMessage(const std::string& msg, std::string& cmd, std::string& args) const {
+    if (msg.size() < 2 || msg.front() != '\001' || msg.back() != '\001')
+        return false;
+    std::string inner = msg.substr(1, msg.size() - 2);
+    size_t sp = inner.find(' ');
+    if (sp == std::string::npos) {
+        cmd = inner;
+        args.clear();
+    } else {
+        cmd = inner.substr(0, sp);
+        args = inner.substr(sp + 1);
+    }
+    return true;
+}
+
 void IRCModel::processLine(const std::string& line) {
     if (line.compare(0, 4, "PING") == 0) {
         size_t colon = line.find(':');
@@ -299,6 +327,28 @@ void IRCModel::processLine(const std::string& line) {
     std::string cmd = line.substr(cmdStart, space2 - cmdStart);
     std::string params;
     if (space2 != std::string::npos) params = line.substr(space2+1);
+
+    // Handle NOTICE (for CTCP replies and generic server notices)
+    if (cmd == "NOTICE") {
+        size_t targetEnd = params.find(' ');
+        if (targetEnd == std::string::npos) return;
+        std::string target = params.substr(0, targetEnd);
+        size_t colon = params.find(':', targetEnd);
+        if (colon == std::string::npos) return;
+        std::string msg = params.substr(colon+1);
+        std::string nick;
+        extractNickFromPrefix(prefix, nick);
+
+        std::string ctcpCmd, ctcpArgs;
+        if (parseCtcpMessage(msg, ctcpCmd, ctcpArgs)) {
+            // CTCP reply
+            if (controller_) controller_->onCtcpReply(nick, ctcpCmd, ctcpArgs);
+        } else {
+            // Normal notice
+            if (controller_) controller_->onNotice(nick, msg);
+        }
+        return;
+    }
 
     if (cmd == "353") {
         size_t colon = params.find(':');
@@ -335,8 +385,6 @@ void IRCModel::processLine(const std::string& line) {
     }
     
     if (cmd == "366") {
-        // Numeric 366: end of NAMES list. Extract channel name robustly.
-        // Format: <client> 366 <nick> <channel> :End of /NAMES list
         std::string channel;
         size_t first = params.find(' ');
         if (first != std::string::npos) {
@@ -370,9 +418,7 @@ void IRCModel::processLine(const std::string& line) {
                 case 375: controller_->onServerMessage("MOTD: " + msg); break;
 
                 case 311: // RPL_WHOISUSER
-                    // Format: <nick> <user> <host> * :<real name>
                     {
-                        // params example: "nick user host * :real name"
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
                             size_t second = params.find(' ', first+1);
@@ -391,7 +437,6 @@ void IRCModel::processLine(const std::string& line) {
                     }
                     break;
                 case 312: // RPL_WHOISSERVER
-                    // Format: <nick> <server> :<server info>
                     {
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
@@ -407,7 +452,6 @@ void IRCModel::processLine(const std::string& line) {
                     }
                     break;
                 case 317: // RPL_WHOISIDLE
-                    // Format: <nick> <idle> <signon> :<idle message>
                     {
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
@@ -417,7 +461,6 @@ void IRCModel::processLine(const std::string& line) {
                                 if (third != std::string::npos) {
                                     std::string nick = params.substr(0, first);
                                     std::string idleSec = params.substr(first+1, second-first-1);
-                                    // Ignore signon time for simplicity
                                     controller_->onServerMessage("WHOIS " + nick + ": idle " + idleSec + " seconds");
                                 }
                             }
@@ -437,7 +480,6 @@ void IRCModel::processLine(const std::string& line) {
                     }
                     break;
                 case 319: // RPL_WHOISCHANNELS
-                    // Format: <nick> :<channels>
                     {
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
@@ -465,9 +507,8 @@ void IRCModel::processLine(const std::string& line) {
                     if (controller_) controller_->onServerMessage("Channel list:");
                     break;
 
-                case 322: // RPL_LIST – format: <nick> <channel> <#visible> :<topic>
+                case 322: // RPL_LIST
                     if (controller_) {
-                        // params = "mynick #channel 5 :topic"
                         size_t first = params.find(' ');
                         if (first != std::string::npos) {
                             size_t second = params.find(' ', first + 1);
@@ -483,7 +524,6 @@ void IRCModel::processLine(const std::string& line) {
                                 }
                             }
                         }
-                        // Fallback: show raw line if parsing fails
                         controller_->onServerMessage("(LIST) " + msg);
                     }
                     break;
@@ -493,12 +533,12 @@ void IRCModel::processLine(const std::string& line) {
                     break;
     
                 default:
-                    // Show any other numeric reply (errors, info, etc.)
                     if (controller_) {
                         std::string fullMsg = "[" + cmd + "] " + msg;
                         controller_->onServerMessage(fullMsg);
                     }
-                    break;            }
+                    break;
+            }
         }
         return;
     }
@@ -512,10 +552,19 @@ void IRCModel::processLine(const std::string& line) {
         std::string msg = params.substr(colon+1);
         std::string nick;
         extractNickFromPrefix(prefix, nick);
-        if (msg.size() >= 8 && msg.substr(0, 7) == "\001ACTION" && msg.back() == '\001') {
-            std::string action = msg.substr(8, msg.size()-9);
-            if (controller_) controller_->onAction(target, nick, action);
+
+        // Check for CTCP
+        std::string ctcpCmd, ctcpArgs;
+        if (parseCtcpMessage(msg, ctcpCmd, ctcpArgs)) {
+            if (ctcpCmd == "ACTION") {
+                // ACTION is already handled as /me
+                if (controller_) controller_->onAction(target, nick, ctcpArgs);
+            } else {
+                // Other CTCP request: inform controller
+                if (controller_) controller_->onCtcpRequest(nick, target, ctcpCmd, ctcpArgs);
+            }
         } else {
+            // Normal message
             if (target[0] == '#') {
                 if (controller_) controller_->onChannelMessage(target, nick, msg);
             } else {
@@ -605,7 +654,7 @@ void IRCModel::extractNickFromPrefix(const std::string& prefix, std::string& nic
 
 void IRCModel::setCurrentChannel(const std::string& channel) {
     currentChannel_ = channel;
-    nicks_.clear();   // stale nick list no longer valid
+    nicks_.clear();
 }
 
 void IRCModel::sendWhois(const std::string& nick) {
