@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <FL/Fl.H>
 
+#include <sstream>
+#include <vector>
+
 #define CLOSE_SOCKET(s) close(s)
 #define IS_VALID_SOCKET(s) ((s) >= 0)
 #define SOCKET_ERROR_VAL (-1)
@@ -418,78 +421,75 @@ void IRCModel::processLine(const std::string& line) {
                 case 375: controller_->onServerMessage("MOTD: " + msg); break;
 
                 case 311: // RPL_WHOISUSER
-                    {
-                        size_t first = params.find(' ');
-                        if (first != std::string::npos) {
-                            size_t second = params.find(' ', first+1);
-                            if (second != std::string::npos) {
-                                size_t third = params.find(' ', second+1);
-                                if (third != std::string::npos) {
-                                    std::string nick = params.substr(0, first);
-                                    std::string user = params.substr(first+1, second-first-1);
-                                    std::string host = params.substr(second+1, third-second-1);
-                                    size_t colon = params.find(':', third);
-                                    std::string real = (colon != std::string::npos) ? params.substr(colon+1) : "";
-                                    controller_->onServerMessage("WHOIS " + nick + ": " + user + "@" + host + " (" + real + ")");
-                                }
-                            }
-                        }
+                {
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    if (tokens.size() >= 5) {  // <my_nick> <nick> <user> <host> * :<real>
+                        std::string nick = tokens[1];
+                        std::string user = tokens[2];
+                        std::string host = tokens[3];
+                        size_t colon = params.find(':');
+                        std::string real = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                        controller_->onServerMessage("WHOIS " + nick + ": " + user + "@" + host + " (" + real + ")");
                     }
-                    break;
+                }
+                break;
                 case 312: // RPL_WHOISSERVER
-                    {
-                        size_t first = params.find(' ');
-                        if (first != std::string::npos) {
-                            size_t second = params.find(' ', first+1);
-                            if (second != std::string::npos) {
-                                std::string nick = params.substr(0, first);
-                                std::string server = params.substr(first+1, second-first-1);
-                                size_t colon = params.find(':', second);
-                                std::string info = (colon != std::string::npos) ? params.substr(colon+1) : "";
-                                controller_->onServerMessage("WHOIS " + nick + ": connected via " + server + " (" + info + ")");
-                            }
-                        }
+                {
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    if (tokens.size() >= 4) {  // <my_nick> <nick> <server> :<info>
+                        std::string nick = tokens[1];
+                        std::string server = tokens[2];
+                        size_t colon = params.find(':');
+                        std::string info = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                        controller_->onServerMessage("WHOIS " + nick + ": connected via " + server + " (" + info + ")");
                     }
-                    break;
+                }
+                break;
                 case 317: // RPL_WHOISIDLE
-                    {
-                        size_t first = params.find(' ');
-                        if (first != std::string::npos) {
-                            size_t second = params.find(' ', first+1);
-                            if (second != std::string::npos) {
-                                size_t third = params.find(' ', second+1);
-                                if (third != std::string::npos) {
-                                    std::string nick = params.substr(0, first);
-                                    std::string idleSec = params.substr(first+1, second-first-1);
-                                    controller_->onServerMessage("WHOIS " + nick + ": idle " + idleSec + " seconds");
-                                }
-                            }
-                        }
+                {
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    if (tokens.size() >= 3) {  // <my_nick> <nick> <idle>
+                        std::string nick = tokens[1];
+                        std::string idleSec = tokens[2];
+                        controller_->onServerMessage("WHOIS " + nick + ": idle " + idleSec + " seconds");
                     }
-                    break;
+                }
+                break;
                 case 318: // RPL_ENDOFWHOIS
-                    {
-                        size_t first = params.find(' ');
-                        if (first != std::string::npos) {
-                            size_t second = params.find(' ', first+1);
-                            if (second != std::string::npos) {
-                                std::string nick = params.substr(0, first);
-                                controller_->onServerMessage("End of WHOIS for " + nick);
-                            }
-                        }
+                {
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    if (tokens.size() >= 2) {  // <my_nick> <nick> :...
+                        std::string nick = tokens[1];
+                        controller_->onServerMessage("End of WHOIS for " + nick);
                     }
-                    break;
+                }
+                break;
                 case 319: // RPL_WHOISCHANNELS
-                    {
-                        size_t first = params.find(' ');
-                        if (first != std::string::npos) {
-                            std::string nick = params.substr(0, first);
-                            size_t colon = params.find(':');
-                            std::string channels = (colon != std::string::npos) ? params.substr(colon+1) : "";
-                            controller_->onServerMessage("WHOIS " + nick + ": is on " + channels);
-                        }
+                {
+                    std::vector<std::string> tokens;
+                    std::stringstream ss(params);
+                    std::string token;
+                    while (ss >> token) tokens.push_back(token);
+                    if (tokens.size() >= 2) {  // <my_nick> <nick> :<channels>
+                        std::string nick = tokens[1];
+                        size_t colon = params.find(':');
+                        std::string channels = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                        controller_->onServerMessage("WHOIS " + nick + ": is on " + channels);
                     }
-                    break;
+                }
+                break;
                 case 401: // ERR_NOSUCHNICK
                     {
                         size_t first = params.find(' ');
@@ -532,49 +532,44 @@ void IRCModel::processLine(const std::string& line) {
                     if (controller_) controller_->onServerMessage("End of channel list.");
                     break;
     
-                case 331:   // RPL_NOTOPIC  (format: "yournick #channel :No topic is set")
+                case 331:   // RPL_NOTOPIC: "<nick> <channel> :No topic is set"
                 {
-                    // Split params by spaces
+                    // Split into tokens
                     std::vector<std::string> tokens;
                     std::stringstream ss(params);
                     std::string token;
                     while (ss >> token) tokens.push_back(token);
-                    
                     if (tokens.size() >= 2) {
-                        std::string channel = tokens[1];          // second token is the real channel
+                        std::string channel = tokens[1];   // second token is real channel
                         controller_->onServerMessage("No topic set for " + channel);
                     }
                 }
                 break;
 
-                case 332:   // RPL_TOPIC   (format: "yournick #channel :the actual topic")
+                case 332:   // RPL_TOPIC: "<nick> <channel> :<topic>"
                 {
+                    // Extract channel (second word) and topic (after colon)
                     size_t firstSpace = params.find(' ');
                     if (firstSpace == std::string::npos) break;
-                    
                     size_t secondSpace = params.find(' ', firstSpace + 1);
                     std::string channel;
                     if (secondSpace != std::string::npos) {
                         channel = params.substr(firstSpace + 1, secondSpace - firstSpace - 1);
                     } else {
-                        // fallback – unlikely
                         channel = params.substr(firstSpace + 1);
                     }
-                    
                     size_t colon = params.find(':');
                     std::string topic = (colon != std::string::npos) ? params.substr(colon + 1) : "";
-                    
                     controller_->onServerMessage("Topic of " + channel + ": " + topic);
                 }
                 break;
 
-                case 333:   // RPL_TOPICWHOTIME (format: "yournick #channel who time")
+                case 333:   // RPL_TOPICWHOTIME: "<nick> <channel> <who> <time>"
                 {
                     std::vector<std::string> tokens;
                     std::stringstream ss(params);
                     std::string token;
                     while (ss >> token) tokens.push_back(token);
-                    
                     if (tokens.size() >= 4) {
                         std::string channel = tokens[1];
                         std::string who = tokens[2];
