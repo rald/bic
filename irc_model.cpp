@@ -368,6 +368,99 @@ void IRCModel::processLine(const std::string& line) {
                     controller_->onServerMessage(msg); break;
                 case 372: controller_->onServerMessage(msg); break;
                 case 375: controller_->onServerMessage("MOTD: " + msg); break;
+
+                case 311: // RPL_WHOISUSER
+                    // Format: <nick> <user> <host> * :<real name>
+                    {
+                        // params example: "nick user host * :real name"
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first+1);
+                            if (second != std::string::npos) {
+                                size_t third = params.find(' ', second+1);
+                                if (third != std::string::npos) {
+                                    std::string nick = params.substr(0, first);
+                                    std::string user = params.substr(first+1, second-first-1);
+                                    std::string host = params.substr(second+1, third-second-1);
+                                    size_t colon = params.find(':', third);
+                                    std::string real = (colon != std::string::npos) ? params.substr(colon+1) : "";
+                                    controller_->onServerMessage("WHOIS " + nick + ": " + user + "@" + host + " (" + real + ")");
+                                }
+                            }
+                        }
+                    }
+                    break;
+                case 312: // RPL_WHOISSERVER
+                    // Format: <nick> <server> :<server info>
+                    {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first+1);
+                            if (second != std::string::npos) {
+                                std::string nick = params.substr(0, first);
+                                std::string server = params.substr(first+1, second-first-1);
+                                size_t colon = params.find(':', second);
+                                std::string info = (colon != std::string::npos) ? params.substr(colon+1) : "";
+                                controller_->onServerMessage("WHOIS " + nick + ": connected via " + server + " (" + info + ")");
+                            }
+                        }
+                    }
+                    break;
+                case 317: // RPL_WHOISIDLE
+                    // Format: <nick> <idle> <signon> :<idle message>
+                    {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first+1);
+                            if (second != std::string::npos) {
+                                size_t third = params.find(' ', second+1);
+                                if (third != std::string::npos) {
+                                    std::string nick = params.substr(0, first);
+                                    std::string idleSec = params.substr(first+1, second-first-1);
+                                    // Ignore signon time for simplicity
+                                    controller_->onServerMessage("WHOIS " + nick + ": idle " + idleSec + " seconds");
+                                }
+                            }
+                        }
+                    }
+                    break;
+                case 318: // RPL_ENDOFWHOIS
+                    {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first+1);
+                            if (second != std::string::npos) {
+                                std::string nick = params.substr(0, first);
+                                controller_->onServerMessage("End of WHOIS for " + nick);
+                            }
+                        }
+                    }
+                    break;
+                case 319: // RPL_WHOISCHANNELS
+                    // Format: <nick> :<channels>
+                    {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            std::string nick = params.substr(0, first);
+                            size_t colon = params.find(':');
+                            std::string channels = (colon != std::string::npos) ? params.substr(colon+1) : "";
+                            controller_->onServerMessage("WHOIS " + nick + ": is on " + channels);
+                        }
+                    }
+                    break;
+                case 401: // ERR_NOSUCHNICK
+                    {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first+1);
+                            if (second != std::string::npos) {
+                                std::string nick = params.substr(first+1, second-first-1);
+                                controller_->onServerMessage("No such nick: " + nick);
+                            }
+                        }
+                    }
+                    break;
+
                 default: break;
             }
         }
@@ -477,4 +570,8 @@ void IRCModel::extractNickFromPrefix(const std::string& prefix, std::string& nic
 void IRCModel::setCurrentChannel(const std::string& channel) {
     currentChannel_ = channel;
     nicks_.clear();   // stale nick list no longer valid
+}
+
+void IRCModel::sendWhois(const std::string& nick) {
+    sendRaw("WHOIS " + sanitizeMessage(nick));
 }

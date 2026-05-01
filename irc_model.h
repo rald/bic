@@ -37,6 +37,8 @@ public:
     // inside class IRCModel, public section
     void setCurrentChannel(const std::string& channel);
 
+    void sendWhois(const std::string& nick);
+
 private:
     void processLine(const std::string& line);
     void extractNickFromPrefix(const std::string& prefix, std::string& nick) const;

@@ -216,6 +216,17 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             view_->appendMessage("[PM] " + model_->getNickname() + " -> " + arg1 + ": " + message);
         }
     }
+    else if (cmd == "whois") {
+        if (arg1.empty()) {
+            view_->appendMessage("Usage: /whois <nick>");
+            return;
+        }
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+        model_->sendWhois(arg1);
+    }
     else if (cmd == "clear") {
         view_->clearDisplay();
         view_->appendMessage("*** Display cleared");
@@ -225,7 +236,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
     }
     else if (cmd == "help") {
         view_->appendMessage("--- BIC IRC Client Commands ---");
-        view_->appendMessage("/connect <server> <port> <nick>   -- connect to IRC server");
+        view_->appendMessage("/connect <server> <port> <nick>  -- connect to IRC server");
         view_->appendMessage("/join <channel> [key]            -- join a channel (with optional key)");
         view_->appendMessage("/part [channel] [reason]         -- leave channel (default: current)");
         view_->appendMessage("/target [target]                 -- set default target for non‑command lines");
@@ -234,6 +245,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         view_->appendMessage("/nick <newnick>                  -- change your nickname");
         view_->appendMessage("/msg <target> <text>             -- send private message");
         view_->appendMessage("/me <action>                     -- send CTCP ACTION");
+        view_->appendMessage("/whois <nick>                    -- get information about a user");
         view_->appendMessage("/clear                           -- clear chat display");
         view_->appendMessage("/disconnect [message]            -- disconnect from server");
         view_->appendMessage("/quit [message]                  -- alias for disconnect");
