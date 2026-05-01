@@ -139,8 +139,8 @@ IRCView::IRCView() {
 }
 
 IRCView::~IRCView() {
-    delete logbuf_;     // FIX: delete text buffer
-    delete window_;     // window deletes its children (logdisp_, input_, sendBtn_)
+    delete window_;     // deletes logdisp_, input_, sendBtn_
+    delete logbuf_;     // buffer must be deleted after the display
 }
 
 void IRCView::show() {

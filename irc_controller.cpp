@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cctype>
 #include <algorithm>
+#include <strings.h>   // for strncasecmp (POSIX)
 
 IRCController::IRCController()
     : model_(new IRCModel())
@@ -57,7 +58,6 @@ IRCController::IRCController()
     });
 }
 
-// FIX: destructor frees model and view
 IRCController::~IRCController() {
     delete model_;
     delete view_;
@@ -78,7 +78,7 @@ void IRCController::sendCallbackStatic(Fl_Widget*, void* data) {
 void IRCController::onSendCommand(const std::string& input) {
     if (input.empty()) return;
 
-    // FIX: avoid duplicate history entries
+    // avoid duplicate history entries
     if (history_.empty() || history_.back() != input) {
         history_.push_back(input);
         if (history_.size() > 100) history_.erase(history_.begin());
@@ -194,7 +194,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             view_->appendMessage("Usage: /msg <target> <message>");
             return;
         }
-        // FIX: extract message safely, preserving spaces
+        // Fixed: extract message safely, preserving spaces
         size_t msgStart = rest.find_first_not_of(' ', arg1.size());
         std::string message = (msgStart != std::string::npos) ? rest.substr(msgStart) : "";
         model_->sendPrivmsg(arg1, message);
@@ -302,7 +302,6 @@ void IRCController::onDisconnected() {
 
 void IRCController::onJoin(const std::string& nick, const std::string& channel) {
     view_->appendMessage("*** " + nick + " has joined " + channel);
-    // FIX: reset completion list when we join a channel ourselves
     if (nick == model_->getNickname()) {
         updateNickCompletionList();
     }

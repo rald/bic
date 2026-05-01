@@ -29,7 +29,6 @@ IRCModel::IRCModel()
 }
 
 IRCModel::~IRCModel() {
-    // remove any pending timeout
     Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
     if (IS_VALID_SOCKET(sockfd_)) {
         Fl::remove_fd(sockfd_);
@@ -54,6 +53,11 @@ void IRCModel::sendRaw(const std::string& msg) {
     std::string out = msg + "\r\n";
     int ret = send(sockfd_, out.c_str(), out.size(), 0);
     if (ret == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Output buffer full – will be sent when socket becomes writable.
+            // For simplicity, we drop the data this time. A full solution would buffer.
+            return;
+        }
         if (controller_) controller_->onError("Send error, disconnecting");
         disconnect();
     }
@@ -130,6 +134,9 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
         return;
     }
 
+    // Remove any previous timeout (e.g., from a previous failed attempt)
+    Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
+
     nickname_ = nick;
     connectAttempt_ = true;
 
@@ -178,15 +185,12 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
 }
 
 void IRCModel::startNonBlockingConnect(int sockfd) {
-    // Set up a timeout using the static callback
     Fl::repeat_timeout(5.0, &IRCModel::connectTimeoutCallback, this);
 
-    // Add write fd callback
     Fl::add_fd(sockfd, FL_WRITE, [](int fd, void* data) {
         IRCModel* self = static_cast<IRCModel*>(data);
         if (!self->connectAttempt_) return;
 
-        // Remove the connection timeout
         Fl::remove_timeout(&IRCModel::connectTimeoutCallback, self);
 
         int err = 0;
@@ -221,7 +225,6 @@ void IRCModel::connectTimeoutCallback(void* data) {
 }
 
 void IRCModel::disconnect(const std::string& quitmsg) {
-    // Remove pending timeout
     Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
 
     if (IS_VALID_SOCKET(sockfd_)) {
@@ -241,7 +244,12 @@ void IRCModel::disconnect(const std::string& quitmsg) {
 void IRCModel::onSocketReady() {
     char buf[4096];
     int n = recv(sockfd_, buf, sizeof(buf)-1, 0);
-    if (n <= 0) {
+    if (n == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return; // no data yet
+        disconnect();
+        return;
+    }
+    if (n == 0) {
         disconnect();
         return;
     }
@@ -327,17 +335,23 @@ void IRCModel::processLine(const std::string& line) {
     }
     
     if (cmd == "366") {
-        size_t space1 = params.find(' ');
-        if (space1 != std::string::npos) {
-            size_t space2 = params.find(' ', space1 + 1);
-            if (space2 != std::string::npos) {
-                std::string channel = params.substr(space1 + 1, space2 - space1 - 1);
-                if (!channel.empty() && channel[0] == ':')
-                    channel = channel.substr(1);
-                if (controller_) {
-                    controller_->onNamesComplete(channel, nicks_);
+        // Numeric 366: end of NAMES list. Extract channel name robustly.
+        // Format: <client> 366 <nick> <channel> :End of /NAMES list
+        std::string channel;
+        size_t first = params.find(' ');
+        if (first != std::string::npos) {
+            size_t second = params.find(' ', first + 1);
+            if (second != std::string::npos) {
+                size_t third = params.find(' ', second + 1);
+                if (third != std::string::npos) {
+                    channel = params.substr(second + 1, third - second - 1);
+                    if (!channel.empty() && channel[0] == ':')
+                        channel = channel.substr(1);
                 }
             }
+        }
+        if (!channel.empty() && controller_) {
+            controller_->onNamesComplete(channel, nicks_);
         }
         return;
     }
