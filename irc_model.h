@@ -13,30 +13,25 @@ public:
 
     void setController(IRCController* ctrl);
 
-    // Connection control
     void connectToServer(const std::string& server, int port, const std::string& nick);
     void disconnect(const std::string& quitmsg = "");
     bool isConnected() const;
     bool isConnecting() const;
 
-    // IRC commands
     void sendRaw(const std::string& msg);
     void sendPrivmsg(const std::string& target, const std::string& msg);
     void sendAction(const std::string& target, const std::string& action);
-    // In irc_model.h, replace the existing joinChannel line with:
     void joinChannel(const std::string& channel, const std::string& key = "");
     void partChannel(const std::string& channel, const std::string& reason = "");
     void changeNick(const std::string& newnick);
     void requestNames(const std::string& channel);
 
-    // State getters
     std::string getCurrentChannel() const;
     std::string getNickname() const;
     std::string getDefaultTarget() const;
     void setDefaultTarget(const std::string& target);
     const std::vector<std::string>& getNicks() const;
 
-    // Called by Fl::add_fd (socket activity)
     void onSocketReady();
 
 private:
@@ -44,6 +39,8 @@ private:
     void extractNickFromPrefix(const std::string& prefix, std::string& nick) const;
     void startNonBlockingConnect(int sockfd);
     void feedRecvData(const char* buf, int len);
+
+    static void connectTimeoutCallback(void* data);   // static timeout handler
 
     int sockfd_;
     bool connectAttempt_;
@@ -56,4 +53,4 @@ private:
     IRCController* controller_;
 };
 
-#endif // IRC_MODEL_H
+#endif

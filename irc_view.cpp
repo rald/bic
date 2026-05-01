@@ -94,9 +94,9 @@ int HistoryInput::handle(int event) {
         if (key == FL_Escape) {
             if (escQuitCallback_) {
                 escQuitCallback_();
-                return 1;   // event handled
+                return 1;
             }
-        }        
+        }
         if (key == FL_Enter || key == FL_KP_Enter) {
             if (callback()) {
                 do_callback();
@@ -109,10 +109,6 @@ int HistoryInput::handle(int event) {
 
 void HistoryInput::setEscQuitCallback(std::function<void()> cb) {
     escQuitCallback_ = cb;
-}
-
-void IRCView::setEscQuitCallback(std::function<void()> cb) {
-    input_->setEscQuitCallback(cb);
 }
 
 // ---------- IRCView ----------
@@ -140,16 +136,15 @@ IRCView::IRCView() {
     input_->textcolor(FL_GREEN);
     input_->cursor_color(FL_GREEN);
     input_->textfont(FL_COURIER);
-    // Send button uses default system color
 }
 
 IRCView::~IRCView() {
-    delete window_;
+    delete logbuf_;     // FIX: delete text buffer
+    delete window_;     // window deletes its children (logdisp_, input_, sendBtn_)
 }
 
 void IRCView::show() {
     window_->show();
-    // Force focus to the input field
     Fl::focus(input_);
     input_->take_focus();
 }
@@ -198,6 +193,10 @@ void IRCView::setHistoryCallbacks(std::function<std::vector<std::string>&()> get
 
 void IRCView::setLogScrollCallback(std::function<void(bool)> scrollPage) {
     input_->setLogScrollCallback(scrollPage);
+}
+
+void IRCView::setEscQuitCallback(std::function<void()> cb) {
+    input_->setEscQuitCallback(cb);
 }
 
 bool IRCView::isAtBottom() const {

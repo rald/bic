@@ -21,7 +21,7 @@ public:
                             std::function<void(const std::string&)> setSavedInput,
                             std::function<std::string()> getSavedInput);
     void setLogScrollCallback(std::function<void(bool)> scrollPage);
-    void setEscQuitCallback(std::function<void()> cb);  // NEW
+    void setEscQuitCallback(std::function<void()> cb);
     int handle(int event) override;
 
 private:
@@ -32,13 +32,13 @@ private:
     std::function<void(const std::string&)> setSavedInput_;
     std::function<std::string()> getSavedInput_;
     std::function<void(bool)> scrollPage_;
-    std::function<void()> escQuitCallback_;  // NEW
+    std::function<void()> escQuitCallback_;
 };
 
 class IRCView {
 public:
     IRCView();
-    ~IRCView();
+    ~IRCView();     // FIX: added destructor
 
     void show();
     void appendMessage(const std::string& msg);
@@ -54,7 +54,7 @@ public:
                              std::function<void(const std::string&)> setSavedInput,
                              std::function<std::string()> getSavedInput);
     void setLogScrollCallback(std::function<void(bool)> scrollPage);
-    void setEscQuitCallback(std::function<void()> cb);  // NEW
+    void setEscQuitCallback(std::function<void()> cb);
     bool isAtBottom() const;
     void scrollToBottom();
 
@@ -68,4 +68,4 @@ private:
     Fl_Button* sendBtn_;
 };
 
-#endif // IRC_VIEW_H
+#endif

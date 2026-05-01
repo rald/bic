@@ -14,6 +14,7 @@
 #define CLOSE_SOCKET(s) close(s)
 #define IS_VALID_SOCKET(s) ((s) >= 0)
 #define SOCKET_ERROR_VAL (-1)
+#define MAX_LINE_LEN 512
 
 static void set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -28,7 +29,12 @@ IRCModel::IRCModel()
 }
 
 IRCModel::~IRCModel() {
-    if (IS_VALID_SOCKET(sockfd_)) disconnect();
+    // remove any pending timeout
+    Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
+    if (IS_VALID_SOCKET(sockfd_)) {
+        Fl::remove_fd(sockfd_);
+        CLOSE_SOCKET(sockfd_);
+    }
 }
 
 void IRCModel::setController(IRCController* ctrl) {
@@ -46,15 +52,29 @@ bool IRCModel::isConnecting() const {
 void IRCModel::sendRaw(const std::string& msg) {
     if (!isConnected()) return;
     std::string out = msg + "\r\n";
-    send(sockfd_, out.c_str(), out.size(), 0);
+    int ret = send(sockfd_, out.c_str(), out.size(), 0);
+    if (ret == -1) {
+        if (controller_) controller_->onError("Send error, disconnecting");
+        disconnect();
+    }
+}
+
+static std::string sanitizeMessage(const std::string& msg) {
+    std::string safe;
+    safe.reserve(msg.size());
+    for (char c : msg) {
+        if (c != '\r' && c != '\n')
+            safe.push_back(c);
+    }
+    return safe;
 }
 
 void IRCModel::sendPrivmsg(const std::string& target, const std::string& msg) {
-    sendRaw("PRIVMSG " + target + " :" + msg);
+    sendRaw("PRIVMSG " + target + " :" + sanitizeMessage(msg));
 }
 
 void IRCModel::sendAction(const std::string& target, const std::string& action) {
-    sendRaw("PRIVMSG " + target + " :\001ACTION " + action + "\001");
+    sendRaw("PRIVMSG " + target + " :\001ACTION " + sanitizeMessage(action) + "\001");
 }
 
 void IRCModel::joinChannel(const std::string& channel, const std::string& key) {
@@ -70,17 +90,16 @@ void IRCModel::partChannel(const std::string& channel, const std::string& reason
     if (reason.empty())
         sendRaw("PART " + channel);
     else
-        sendRaw("PART " + channel + " :" + reason);
+        sendRaw("PART " + channel + " :" + sanitizeMessage(reason));
     if (channel == currentChannel_) currentChannel_.clear();
 }
 
 void IRCModel::changeNick(const std::string& newnick) {
-    sendRaw("NICK " + newnick);
+    sendRaw("NICK " + sanitizeMessage(newnick));
     nickname_ = newnick;
 }
 
 void IRCModel::requestNames(const std::string& channel) {
-    // Clear current nick list for this channel before requesting fresh list
     nicks_.clear();
     sendRaw("NAMES " + channel);
 }
@@ -110,7 +129,6 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
         if (controller_) controller_->onError("Already connected or connecting");
         return;
     }
-    if (controller_) controller_->onError("Attempting to connect to " + server + ":" + std::to_string(port) + " as " + nick);  // DEBUG
 
     nickname_ = nick;
     connectAttempt_ = true;
@@ -136,7 +154,7 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
         if (connect(sockfd_, rp->ai_addr, rp->ai_addrlen) == 0) {
             connectAttempt_ = false;
             Fl::add_fd(sockfd_, FL_READ, [](int fd, void* data) {
-                (void)fd; // unused parameter
+                (void)fd;
                 static_cast<IRCModel*>(data)->onSocketReady();
             }, this);
             sendRaw("NICK " + nickname_);
@@ -160,21 +178,31 @@ void IRCModel::connectToServer(const std::string& server, int port, const std::s
 }
 
 void IRCModel::startNonBlockingConnect(int sockfd) {
+    // Set up a timeout using the static callback
+    Fl::repeat_timeout(5.0, &IRCModel::connectTimeoutCallback, this);
+
+    // Add write fd callback
     Fl::add_fd(sockfd, FL_WRITE, [](int fd, void* data) {
         IRCModel* self = static_cast<IRCModel*>(data);
         if (!self->connectAttempt_) return;
+
+        // Remove the connection timeout
+        Fl::remove_timeout(&IRCModel::connectTimeoutCallback, self);
+
         int err = 0;
         socklen_t len = sizeof(err);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err != 0) {
             self->connectAttempt_ = false;
+            Fl::remove_fd(fd);
             CLOSE_SOCKET(fd);
             self->sockfd_ = SOCKET_ERROR_VAL;
             if (self->controller_) self->controller_->onConnectionFailed(strerror(err));
             return;
         }
+
         Fl::remove_fd(fd);
         Fl::add_fd(fd, FL_READ, [](int fd2, void* data2) {
-            (void)fd2; // unused parameter
+            (void)fd2;
             static_cast<IRCModel*>(data2)->onSocketReady();
         }, self);
         self->connectAttempt_ = false;
@@ -182,21 +210,24 @@ void IRCModel::startNonBlockingConnect(int sockfd) {
         self->sendRaw("USER " + self->nickname_ + " 0 * :BIC IRC Client");
         if (self->controller_) self->controller_->onConnected();
     }, this);
+}
 
-    Fl::add_timeout(5.0, [](void* data) {
-        IRCModel* self = static_cast<IRCModel*>(data);
-        if (self->connectAttempt_) {
-            self->disconnect();
-            if (self->controller_) self->controller_->onConnectionFailed("Connection timeout");
-        }
-    }, this);
+void IRCModel::connectTimeoutCallback(void* data) {
+    IRCModel* self = static_cast<IRCModel*>(data);
+    if (self->connectAttempt_) {
+        self->disconnect();
+        if (self->controller_) self->controller_->onConnectionFailed("Connection timeout");
+    }
 }
 
 void IRCModel::disconnect(const std::string& quitmsg) {
+    // Remove pending timeout
+    Fl::remove_timeout(&IRCModel::connectTimeoutCallback, this);
+
     if (IS_VALID_SOCKET(sockfd_)) {
-        if (isConnected() && !quitmsg.empty()) sendRaw("QUIT :" + quitmsg);
-        CLOSE_SOCKET(sockfd_);
+        if (isConnected() && !quitmsg.empty()) sendRaw("QUIT :" + sanitizeMessage(quitmsg));
         Fl::remove_fd(sockfd_);
+        CLOSE_SOCKET(sockfd_);
     }
     sockfd_ = SOCKET_ERROR_VAL;
     connectAttempt_ = false;
@@ -224,12 +255,19 @@ void IRCModel::feedRecvData(const char* data, int len) {
     while ((pos = lineBuffer_.find("\r\n")) != std::string::npos) {
         std::string line = lineBuffer_.substr(0, pos);
         lineBuffer_.erase(0, pos + 2);
+        if (line.size() > MAX_LINE_LEN) line = line.substr(0, MAX_LINE_LEN);
+        processLine(line);
+    }
+    if ((pos = lineBuffer_.find('\n')) != std::string::npos) {
+        std::string line = lineBuffer_.substr(0, pos);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lineBuffer_.erase(0, pos + 1);
+        if (line.size() > MAX_LINE_LEN) line = line.substr(0, MAX_LINE_LEN);
         processLine(line);
     }
 }
 
 void IRCModel::processLine(const std::string& line) {
-    // PING
     if (line.compare(0, 4, "PING") == 0) {
         size_t colon = line.find(':');
         if (colon != std::string::npos)
@@ -254,7 +292,6 @@ void IRCModel::processLine(const std::string& line) {
     std::string params;
     if (space2 != std::string::npos) params = line.substr(space2+1);
 
-    // RPL_NAMREPLY (353)
     if (cmd == "353") {
         size_t colon = params.find(':');
         if (colon != std::string::npos) {
@@ -284,14 +321,12 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // RPL_ENDOFMOTD (376) or ERR_NOMOTD (422)
     if (cmd == "376" || cmd == "422") {
         if (controller_) controller_->onMotdEnd();
         return;
     }
     
     if (cmd == "366") {
-        // Extract channel (third token) – fixed
         size_t space1 = params.find(' ');
         if (space1 != std::string::npos) {
             size_t space2 = params.find(' ', space1 + 1);
@@ -307,50 +342,24 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // Numeric replies (server messages)
     if (cmd.size() == 3 && std::isdigit(cmd[0]) && std::isdigit(cmd[1]) && std::isdigit(cmd[2])) {
-        // Extract the human-readable message after the colon
         size_t colon = params.find(':');
         std::string msg = (colon != std::string::npos) ? params.substr(colon + 1) : params;
         if (!msg.empty() && controller_) {
-            // Special handling for common numerics to produce prettier messages
             int num = std::stoi(cmd);
             switch (num) {
-                case 001: // RPL_WELCOME
-                    controller_->onServerMessage("Welcome to the IRC server: " + msg);
-                    break;
-                case 002: // RPL_YOURHOST
-                case 003: // RPL_CREATED
-                case 004: // RPL_MYINFO
-                    controller_->onServerMessage(msg);
-                    break;
-                case 251: // RPL_LUSERCLIENT
-                case 252: // RPL_LUSEROP
-                case 253: // RPL_LUSERUNKNOWN
-                case 254: // RPL_LUSERCHANNELS
-                case 255: // RPL_LUSERME
-                case 265: // RPL_LOCALUSERS
-                case 266: // RPL_GLOBALUSERS
-                    controller_->onServerMessage(msg);
-                    break;
-                case 372: // RPL_MOTD
-                    controller_->onServerMessage(msg);
-                    break;
-                case 375: // RPL_MOTDSTART
-                    controller_->onServerMessage("MOTD: " + msg);
-                    break;
-                // 376 handled separately (onMotdEnd)
-                // 422 handled separately (no MOTD)
-                default:
-                    // For any other numeric, just show the raw line (optional)
-                    // controller_->onRawLine(line);
-                    break;
+                case 001: controller_->onServerMessage("Welcome to the IRC server: " + msg); break;
+                case 002: case 003: case 004: controller_->onServerMessage(msg); break;
+                case 251: case 252: case 253: case 254: case 255: case 265: case 266:
+                    controller_->onServerMessage(msg); break;
+                case 372: controller_->onServerMessage(msg); break;
+                case 375: controller_->onServerMessage("MOTD: " + msg); break;
+                default: break;
             }
         }
-        return; // Don't show numeric again as raw line
+        return;
     }
 
-    // PRIVMSG
     if (cmd == "PRIVMSG") {
         size_t targetEnd = params.find(' ');
         if (targetEnd == std::string::npos) return;
@@ -373,7 +382,6 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // JOIN
     if (cmd == "JOIN") {
         size_t colon = params.find(':');
         std::string channel = (colon != std::string::npos) ? params.substr(colon+1) : params;
@@ -391,7 +399,6 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // PART
     if (cmd == "PART") {
         size_t space = params.find(' ');
         std::string channel = params.substr(0, space);
@@ -410,7 +417,6 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // QUIT
     if (cmd == "QUIT") {
         std::string reason;
         size_t colon = params.find(':');
@@ -424,7 +430,6 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // NICK
     if (cmd == "NICK") {
         std::string newnick;
         size_t colon = params.find(':');
@@ -444,7 +449,6 @@ void IRCModel::processLine(const std::string& line) {
         return;
     }
 
-    // fallback
     if (controller_) controller_->onRawLine(line);
 }
 

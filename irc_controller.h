@@ -3,7 +3,7 @@
 
 #include <string>
 #include <vector>
-#include <FL/Fl_Widget.H>   // for Fl_Widget*
+#include <FL/Fl_Widget.H>
 
 class IRCModel;
 class IRCView;
@@ -11,6 +11,7 @@ class IRCView;
 class IRCController {
 public:
     IRCController();
+    ~IRCController();                           // FIX: destructor
     void run();
 
     void onSendCommand(const std::string& input);
@@ -56,4 +57,4 @@ private:
     int completionIndex_;
 };
 
-#endif // IRC_CONTROLLER_H
+#endif

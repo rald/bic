@@ -31,7 +31,6 @@ IRCController::IRCController()
         [this]() -> std::string { return savedInput_; }
     );
 
-// Conditional scrollbar support for FLTK 1.3+
 #if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
     view_->setLogScrollCallback([this](bool up) {
         Fl_Scrollbar* sb = view_->logDisplay()->scrollbar();
@@ -44,19 +43,24 @@ IRCController::IRCController()
         }
     });
 #else
-    // No-op for FLTK 1.1 (scrollbar() method not available)
     view_->setLogScrollCallback([](bool) {});
 #endif
 
     view_->setEscQuitCallback([this]() {
         int choice = fl_choice("Quit BIC IRC Client?", "No", "Yes", NULL);
-        if (choice == 1) {   // "Yes" button (index 1)
+        if (choice == 1) {
             model_->disconnect("Leaving");
             view_->appendMessage("*** Goodbye!");
-            Fl::check();      // let the message appear
+            Fl::check();
             exit(0);
         }
-});
+    });
+}
+
+// FIX: destructor frees model and view
+IRCController::~IRCController() {
+    delete model_;
+    delete view_;
 }
 
 void IRCController::run() {
@@ -68,17 +72,17 @@ void IRCController::run() {
 
 void IRCController::sendCallbackStatic(Fl_Widget*, void* data) {
     IRCController* self = static_cast<IRCController*>(data);
-    // DEBUG: Uncomment to verify callback is triggered
-    // self->view_->appendMessage("*** DEBUG: Send callback triggered");
     self->onSendCommand(self->view_->getInputText());
 }
 
 void IRCController::onSendCommand(const std::string& input) {
-    // view_->appendMessage("*** DEBUG: onSendCommand called with: '" + input + "'");  // DEBUG
     if (input.empty()) return;
 
-    history_.push_back(input);
-    if (history_.size() > 100) history_.erase(history_.begin());
+    // FIX: avoid duplicate history entries
+    if (history_.empty() || history_.back() != input) {
+        history_.push_back(input);
+        if (history_.size() > 100) history_.erase(history_.begin());
+    }
     historyPos_ = -1;
     savedInput_.clear();
 
@@ -124,17 +128,21 @@ void IRCController::executeCommand(const std::string& cmdLine) {
     };
     split(rest, arg1, arg2, arg3);
     if (cmd == "connect") {
-        view_->appendMessage("*** DEBUG: Parsing connect command");  // DEBUG
         if (arg1.empty() || arg2.empty() || arg3.empty()) {
             view_->appendMessage("Usage: /connect <server> <port> <nick>");
             return;
         }
-        int port = atoi(arg2.c_str());
+        int port;
+        try {
+            port = std::stoi(arg2);
+        } catch (...) {
+            view_->appendMessage("Invalid port number");
+            return;
+        }
         if (port <= 0 || port > 65535) {
             view_->appendMessage("Invalid port number");
             return;
         }
-        view_->appendMessage("*** DEBUG: Connecting to " + arg1 + ":" + arg2 + " as " + arg3);
         model_->connectToServer(arg1, port, arg3);
     }
     else if (cmd == "join") {
@@ -142,9 +150,7 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             view_->appendMessage("Usage: /join <channel> [key]");
             return;
         }
-        std::string channel = arg1;
-        std::string key = arg2;   // optional key, already split
-        model_->joinChannel(channel, key);
+        model_->joinChannel(arg1, arg2);
     }
     else if (cmd == "part") {
         std::string chan = arg1.empty() ? model_->getCurrentChannel() : arg1;
@@ -184,19 +190,20 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         model_->changeNick(arg1);
     }
     else if (cmd == "msg") {
-        if (arg1.empty() || arg2.empty()) { 
-            view_->appendMessage("Usage: /msg <target> <message>"); 
-            return; 
+        if (arg1.empty() || arg2.empty()) {
+            view_->appendMessage("Usage: /msg <target> <message>");
+            return;
         }
-        std::string message = rest.substr(arg1.size()+1);
+        // FIX: extract message safely, preserving spaces
+        size_t msgStart = rest.find_first_not_of(' ', arg1.size());
+        std::string message = (msgStart != std::string::npos) ? rest.substr(msgStart) : "";
         model_->sendPrivmsg(arg1, message);
         if (arg1[0] == '#') {
             view_->appendMessage("[" + arg1 + "] <" + model_->getNickname() + "> " + message);
         } else {
-            // Outgoing PM: MyNick -> Target: message
             view_->appendMessage("[PM] " + model_->getNickname() + " -> " + arg1 + ": " + message);
         }
-    }    
+    }
     else if (cmd == "clear") {
         view_->clearDisplay();
         view_->appendMessage("*** Display cleared");
@@ -290,12 +297,15 @@ void IRCController::onConnectionFailed(const std::string& reason) {
 
 void IRCController::onDisconnected() {
     view_->appendMessage("*** Disconnected.");
-    completionPrefix_.clear();
-    completionIndex_ = 0;
+    updateNickCompletionList();
 }
 
 void IRCController::onJoin(const std::string& nick, const std::string& channel) {
     view_->appendMessage("*** " + nick + " has joined " + channel);
+    // FIX: reset completion list when we join a channel ourselves
+    if (nick == model_->getNickname()) {
+        updateNickCompletionList();
+    }
 }
 
 void IRCController::onPart(const std::string& nick, const std::string& channel, const std::string& reason) {
@@ -346,14 +356,10 @@ void IRCController::onError(const std::string& error) {
 
 void IRCController::onNamesComplete(const std::string& channel, const std::vector<std::string>& nicks) {
     std::vector<std::string> allNicks = nicks;
-    
-    // Ensure own nickname is included
     std::string myNick = model_->getNickname();
     if (!myNick.empty() && std::find(allNicks.begin(), allNicks.end(), myNick) == allNicks.end()) {
         allNicks.push_back(myNick);
     }
-
-    // Optional: sort alphabetically
     std::sort(allNicks.begin(), allNicks.end());
 
     if (allNicks.empty()) {
