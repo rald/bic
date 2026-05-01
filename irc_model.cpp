@@ -461,6 +461,28 @@ void IRCModel::processLine(const std::string& line) {
                     }
                     break;
 
+                case 321: // RPL_LISTSTART
+                    if (controller_) controller_->onServerMessage("Channel list:");
+                    break;
+                case 322: // RPL_LIST – format: <channel> <#visible> :<topic>
+                    if (controller_) {
+                        size_t first = params.find(' ');
+                        if (first != std::string::npos) {
+                            size_t second = params.find(' ', first + 1);
+                            if (second != std::string::npos) {
+                                std::string channel = params.substr(0, first);
+                                std::string visible = params.substr(first + 1, second - first - 1);
+                                size_t colon = params.find(':', second);
+                                std::string topic = (colon != std::string::npos) ? params.substr(colon + 1) : "";
+                                controller_->onServerMessage(channel + " (" + visible + " users) – " + topic);
+                            }
+                        }
+                    }
+                    break;
+                case 323: // RPL_LISTEND
+                    if (controller_) controller_->onServerMessage("End of channel list.");
+                    break;
+
                 default: break;
             }
         }
