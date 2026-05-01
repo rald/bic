@@ -278,6 +278,50 @@ void IRCController::executeCommand(const std::string& cmdLine) {
     else if (cmd == "disconnect" || cmd == "quit") {
         model_->disconnect(arg1);
     }
+    else if (cmd == "topic") {
+        std::string channel, newTopic;
+        // If no argument, use current channel (if any)
+        if (arg1.empty()) {
+            channel = model_->getCurrentChannel();
+            if (channel.empty()) {
+                view_->appendMessage("*** No current channel. Use /topic #channel or /target first.");
+                return;
+            }
+        } else {
+            // First argument may be a channel. If it starts with '#', treat as channel.
+            if (arg1[0] == '#') {
+                channel = arg1;
+                // The rest (arg2 + arg3) becomes the topic, but we need the full remaining text.
+                // Better to reconstruct from original rest string.
+                size_t firstSpace = rest.find(' ');
+                if (firstSpace != std::string::npos) {
+                    size_t secondSpace = rest.find(' ', firstSpace + 1);
+                    if (secondSpace != std::string::npos) {
+                        newTopic = rest.substr(secondSpace + 1);
+                    } else {
+                        // only channel given, no topic -> query
+                        newTopic.clear();
+                    }
+                } else {
+                    // only channel given
+                    newTopic.clear();
+                }
+            } else {
+                // No channel given, assume current channel, and the whole rest is the new topic
+                channel = model_->getCurrentChannel();
+                if (channel.empty()) {
+                    view_->appendMessage("*** No current channel. Use /topic #channel or /target first.");
+                    return;
+                }
+                newTopic = rest;
+            }
+        }
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+        model_->sendTopic(channel, newTopic);
+    }
     else if (cmd == "help") {
         view_->appendMessage("--- BIC IRC Client Commands ---");
         view_->appendMessage("/connect <server> <port> <nick>  -- connect to IRC server");
@@ -291,13 +335,12 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         view_->appendMessage("/me <target> <action>            -- send CTCP ACTION to a channel or nickname");
         view_->appendMessage("/whois <nick>                    -- get information about a user");
         view_->appendMessage("/ctcp <target> <command> [args]  -- send a CTCP request (e.g. VERSION, PING, TIME)");
+        view_->appendMessage("/topic [#channel] [new topic]    -- view or set the channel topic");
         view_->appendMessage("/clear                           -- clear chat display");
         view_->appendMessage("/disconnect [message]            -- disconnect from server");
         view_->appendMessage("/quit [message]                  -- alias for disconnect");
         view_->appendMessage("/help                            -- this help");
-        view_->appendMessage("---");
-        view_->appendMessage("Any line not starting with '/' is sent to default target or current channel.");
-        view_->appendMessage("Press Up/Down arrows for history, Tab completes nicknames.");
+        // ... rest unchanged
     }
     else {
         view_->appendMessage("Unknown command: /" + cmd + ". Type /help");

@@ -532,6 +532,49 @@ void IRCModel::processLine(const std::string& line) {
                     if (controller_) controller_->onServerMessage("End of channel list.");
                     break;
     
+
+                case 331:   // RPL_NOTOPIC
+                {
+                    // params: <channel> :No topic is set
+                    size_t first = params.find(' ');
+                    if (first != std::string::npos) {
+                        std::string channel = params.substr(0, first);
+                        controller_->onServerMessage("No topic set for " + channel);
+                    }
+                }
+                break;
+
+                case 332:   // RPL_TOPIC
+                {
+                    // params: <channel> :<topic>
+                    size_t first = params.find(' ');
+                    if (first != std::string::npos) {
+                        std::string channel = params.substr(0, first);
+                        size_t colon = params.find(':');
+                        if (colon != std::string::npos) {
+                            std::string topic = params.substr(colon + 1);
+                            controller_->onServerMessage("Topic of " + channel + ": " + topic);
+                        }
+                    }
+                }
+                break;
+
+                case 333:   // RPL_TOPICWHOTIME (optional)
+                {
+                    // params: <channel> <who> <time>
+                    size_t first = params.find(' ');
+                    if (first != std::string::npos) {
+                        size_t second = params.find(' ', first + 1);
+                        if (second != std::string::npos) {
+                            std::string channel = params.substr(0, first);
+                            std::string who = params.substr(first + 1, second - first - 1);
+                            std::string timeStr = params.substr(second + 1);
+                            controller_->onServerMessage("Topic set by " + who + " at " + timeStr);
+                        }
+                    }
+                }
+                break;
+
                 default:
                     if (controller_) {
                         std::string fullMsg = "[" + cmd + "] " + msg;
@@ -659,4 +702,11 @@ void IRCModel::setCurrentChannel(const std::string& channel) {
 
 void IRCModel::sendWhois(const std::string& nick) {
     sendRaw("WHOIS " + sanitizeMessage(nick));
+}
+
+void IRCModel::sendTopic(const std::string& channel, const std::string& topic) {
+    if (topic.empty())
+        sendRaw("TOPIC " + channel);
+    else
+        sendRaw("TOPIC " + channel + " :" + sanitizeMessage(topic));
 }
