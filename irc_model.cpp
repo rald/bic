@@ -352,6 +352,28 @@ void IRCModel::processLine(const std::string& line) {
         }
         return;
     }
+    
+    if (cmd == "MODE") {
+        // Format: :nick!user@host MODE #channel +o target
+        // or simply: MODE #channel +o
+        std::string nick;
+        extractNickFromPrefix(prefix, nick);
+
+        // Parse target and mode changes from params
+        size_t space = params.find(' ');
+        if (space == std::string::npos) return;
+        std::string target = params.substr(0, space);
+        std::string modePart = params.substr(space + 1);
+
+        std::string msg;
+        if (nick.empty())
+            msg = "Mode change on " + target + ": " + modePart;
+        else
+            msg = nick + " sets mode on " + target + ": " + modePart;
+
+        if (controller_) controller_->onServerMessage(msg);
+        return;
+    }    
 
     if (cmd == "353") {
         size_t colon = params.find(':');
@@ -579,6 +601,34 @@ void IRCModel::processLine(const std::string& line) {
                 }
                 break;
 
+                case 324:  // RPL_CHANNELMODEIS
+                {
+                    // Format: "<my_nick> <channel> <mode> [<mode params>]"
+                    // Example: ":server 324 mynick #channel +nt"
+                    size_t first = params.find(' ');
+                    if (first != std::string::npos) {
+                        size_t second = params.find(' ', first + 1);
+                        if (second != std::string::npos) {
+                            std::string channel = params.substr(first + 1, second - first - 1);
+                            std::string modes = params.substr(second + 1);
+                            controller_->onServerMessage("Mode for " + channel + " is " + modes);
+                        }
+                    }
+                    break;
+                }
+
+                case 221:  // RPL_UMODEIS
+                {
+                    // Format: "<my_nick> <user_modes>"
+                    // Example: ":server 221 mynick +i"
+                    size_t first = params.find(' ');
+                    if (first != std::string::npos) {
+                        std::string modes = params.substr(first + 1);
+                        controller_->onServerMessage("Your user mode is " + modes);
+                    }
+                    break;
+                }
+
                 default:
                     if (controller_) {
                         std::string fullMsg = "[" + cmd + "] " + msg;
@@ -713,4 +763,10 @@ void IRCModel::sendTopic(const std::string& channel, const std::string& topic) {
         sendRaw("TOPIC " + channel);
     else
         sendRaw("TOPIC " + channel + " :" + sanitizeMessage(topic));
+}
+
+void IRCModel::sendMode(const std::string& target, const std::string& modeArgs) {
+    std::string cmd = "MODE " + target;
+    if (!modeArgs.empty()) cmd += " " + modeArgs;
+    sendRaw(cmd);
 }

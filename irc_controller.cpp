@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <strings.h>   // for strncasecmp (POSIX)
 #include <ctime>
+#include <unordered_map>
 
 IRCController::IRCController()
     : model_(new IRCModel())
@@ -316,6 +317,49 @@ void IRCController::executeCommand(const std::string& cmdLine) {
             model_->sendTopic(channel, newTopic);
         }
     }
+    else if (cmd == "mode") {
+        if (arg1.empty()) {
+            view_->appendMessage("Usage: /mode <target> [modestring [parameters...]]");
+            return;
+        }
+        if (!model_->isConnected()) {
+            view_->appendMessage("*** Not connected.");
+            return;
+        }
+        // Capture everything after the target (the mode string and parameters)
+        std::string modeArgs;
+        size_t firstSpace = rest.find(' ');
+        if (firstSpace != std::string::npos) {
+            modeArgs = rest.substr(firstSpace + 1);
+        }
+        model_->sendMode(arg1, modeArgs);
+    }
+    else if (cmd == "ignore") {
+        if (arg1.empty()) {
+            // List ignored nicks
+            if (ignoredNicks_.empty()) {
+                view_->appendMessage("*** No ignored nicks.");
+            } else {
+                std::string list;
+                for (const auto& pair : ignoredNicks_) {
+                    if (!list.empty()) list += ", ";
+                    list += pair.second;   // original case
+                }
+                view_->appendMessage("*** Ignored nicks: " + list);
+            }
+        } else {
+            addIgnoredNick(arg1);
+            view_->appendMessage("*** Now ignoring " + arg1);
+        }
+    }
+    else if (cmd == "unignore") {
+        if (arg1.empty()) {
+            view_->appendMessage("Usage: /unignore <nick>");
+        } else {
+            removeIgnoredNick(arg1);
+            view_->appendMessage("*** No longer ignoring " + arg1);
+        }
+    }
     else if (cmd == "help") {
         view_->appendMessage("--- BIC IRC Client Commands ---");
         view_->appendMessage("/connect <server> <port> <nick>  -- connect to IRC server");
@@ -328,13 +372,15 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         view_->appendMessage("/msg <target> <text>             -- send private message");
         view_->appendMessage("/me <target> <action>            -- send CTCP ACTION to a channel or nickname");
         view_->appendMessage("/whois <nick>                    -- get information about a user");
+        view_->appendMessage("/mode <target> [modestring [params]]  -- view or change channel/user modes");
         view_->appendMessage("/ctcp <target> <command> [args]  -- send a CTCP request (e.g. VERSION, PING, TIME)");
         view_->appendMessage("/topic [#channel] [new topic]    -- view or set the channel topic");
         view_->appendMessage("/clear                           -- clear chat display");
+        view_->appendMessage("/ignore [nick]                   -- ignore a user (or list ignored)");
+        view_->appendMessage("/unignore <nick>                 -- remove a user from ignore list");
         view_->appendMessage("/disconnect [message]            -- disconnect from server");
         view_->appendMessage("/quit [message]                  -- alias for disconnect");
         view_->appendMessage("/help                            -- this help");
-        // ... rest unchanged
     }
     else {
         view_->appendMessage("Unknown command: /" + cmd + ". Type /help");
@@ -439,14 +485,17 @@ void IRCController::onNickList(const std::vector<std::string>& nicks) {
 }
 
 void IRCController::onChannelMessage(const std::string& target, const std::string& nick, const std::string& msg) {
+    if (isIgnored(nick)) return;
     view_->appendMessage("[" + target + "] <" + nick + "> " + msg);
 }
 
 void IRCController::onPmMessage(const std::string& nick, const std::string& msg) {
+    if (isIgnored(nick)) return;
     view_->appendMessage("[PM] " + model_->getNickname() + " <- " + nick + ": " + msg);
 }
 
 void IRCController::onAction(const std::string& target, const std::string& nick, const std::string& action) {
+    if (isIgnored(nick)) return;
     if (target[0] == '#')
         view_->appendMessage("* " + nick + " " + action + " (in " + target + ")");
     else
@@ -461,10 +510,21 @@ void IRCController::onError(const std::string& error) {
     view_->appendMessage("*** ERROR: " + error);
 }
 
+// Helper: case‑insensitive search in a vector of strings
+static bool caseInsensitiveFind(const std::vector<std::string>& vec, const std::string& target) {
+    return std::find_if(vec.begin(), vec.end(),
+        [&](const std::string& s) {
+            return s.size() == target.size() &&
+                   std::equal(s.begin(), s.end(), target.begin(),
+                       [](char a, char b) { return std::tolower(a) == std::tolower(b); });
+        }) != vec.end();
+}
+
 void IRCController::onNamesComplete(const std::string& channel, const std::vector<std::string>& nicks) {
     std::vector<std::string> allNicks = nicks;
     std::string myNick = model_->getNickname();
-    if (!myNick.empty() && std::find(allNicks.begin(), allNicks.end(), myNick) == allNicks.end()) {
+    // Add my own nick only if it's not already present (case‑insensitive)
+    if (!myNick.empty() && !caseInsensitiveFind(allNicks, myNick)) {
         allNicks.push_back(myNick);
     }
     std::sort(allNicks.begin(), allNicks.end());
@@ -490,16 +550,19 @@ void IRCController::onServerMessage(const std::string& msg) {
 }
 
 void IRCController::onNotice(const std::string& from, const std::string& msg) {
+    if (isIgnored(from)) return;
     view_->appendMessage("[NOTICE from " + from + "] " + msg);
 }
 
 void IRCController::onCtcpRequest(const std::string& from, const std::string& /*target*/, const std::string& command, const std::string& args) {
+    if (isIgnored(from)) return;
     view_->appendMessage("[CTCP] Request from " + from + ": " + command + (args.empty() ? "" : " " + args));
     // Auto-reply to common CTCP commands
     sendCtcpReplyAuto(from, command, args);
 }
 
 void IRCController::onCtcpReply(const std::string& from, const std::string& command, const std::string& args) {
+    if (isIgnored(from)) return;
     view_->appendMessage("[CTCP reply from " + from + "] " + command + (args.empty() ? "" : ": " + args));
 }
 
@@ -530,4 +593,24 @@ void IRCController::sendCtcpReplyAuto(const std::string& target, const std::stri
         model_->sendCtcpReply(target, "PING", args);
     }
     // For other CTCP commands, we ignore.
+}
+
+// ----- ignore list helpers -----
+std::string IRCController::toLower(const std::string& s) const {
+    std::string lc;
+    lc.reserve(s.size());
+    std::transform(s.begin(), s.end(), std::back_inserter(lc), ::tolower);
+    return lc;
+}
+
+bool IRCController::isIgnored(const std::string& nick) const {
+    return ignoredNicks_.find(toLower(nick)) != ignoredNicks_.end();
+}
+
+void IRCController::addIgnoredNick(const std::string& nick) {
+    ignoredNicks_[toLower(nick)] = nick;
+}
+
+void IRCController::removeIgnoredNick(const std::string& nick) {
+    ignoredNicks_.erase(toLower(nick));
 }

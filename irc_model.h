@@ -29,6 +29,7 @@ public:
     void requestNames(const std::string& channel);
     void sendTopic(const std::string& channel, const std::string& topic = "");   // NEW
     void sendWhois(const std::string& nick);
+    void sendMode(const std::string& target, const std::string& modeArgs);
 
     std::string getCurrentChannel() const;
     std::string getNickname() const;
@@ -38,6 +39,7 @@ public:
 
     void onSocketReady();
     void setCurrentChannel(const std::string& channel);
+
 
 private:
     void processLine(const std::string& line);

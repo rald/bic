@@ -3,6 +3,8 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>        // for ignore list
+#include <cctype>               // for tolower
 #include <FL/Fl_Widget.H>
 
 class IRCModel;
@@ -51,6 +53,12 @@ private:
 
     static void sendCallbackStatic(Fl_Widget* w, void* data);
 
+    // ---- ignore list support ----
+    bool isIgnored(const std::string& nick) const;
+    void addIgnoredNick(const std::string& nick);
+    void removeIgnoredNick(const std::string& nick);
+    std::string toLower(const std::string& s) const;
+
     IRCModel* model_;
     IRCView* view_;
 
@@ -59,6 +67,8 @@ private:
     std::string savedInput_;
     std::string completionPrefix_;
     int completionIndex_;
+
+    std::unordered_map<std::string, std::string> ignoredNicks_;  // lower -> original
 };
 
 #endif
