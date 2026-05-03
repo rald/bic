@@ -488,8 +488,9 @@ void IRCController::onJoin(const std::string& nick, const std::string& channel) 
     view_->appendMessage("*** " + nick + " has joined " + channel);
     if (nick == model_->getNickname()) {
         updateNickCompletionList();
-        model_->setDefaultTarget(channel);
-        view_->appendMessage("*** Default target set to " + channel);
+        // Removed automatic default target setting:
+        // model_->setDefaultTarget(channel);
+        // view_->appendMessage("*** Default target set to " + channel);
     }
 }
 
