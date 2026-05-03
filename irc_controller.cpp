@@ -17,6 +17,7 @@ IRCController::IRCController()
     , view_(new IRCView())
     , historyPos_(-1)
     , completionIndex_(0)
+    , showNamesOutput_(false)
 {
     model_->setController(this);
 
@@ -218,10 +219,11 @@ void IRCController::executeCommand(const std::string& cmdLine) {
         else
             view_->appendMessage("* " + model_->getNickname() + " " + action + " (to " + target + ")");
     }
-    else if (cmd == "names") {
-        if (arg1.empty()) { view_->appendMessage("Usage: /names <channel>"); return; }
-        model_->requestNames(arg1);
-    }
+	else if (cmd == "names") {
+		if (arg1.empty()) { view_->appendMessage("Usage: /names <channel>"); return; }
+		showNamesOutput_ = true;          // <-- new
+		model_->requestNames(arg1);
+	}
     else if (cmd == "list") {
         if (!model_->isConnected()) { view_->appendMessage("*** Not connected."); return; }
         model_->sendRaw("LIST" + (arg1.empty() ? "" : " " + arg1));
@@ -388,11 +390,40 @@ void IRCController::executeCommand(const std::string& cmdLine) {
 }
 
 bool IRCController::performCompletion(const std::string& text, int cursorPos, std::string& newText, int& newPos) {
-    if (model_->getCurrentChannel().empty() || model_->getNicks().empty()) return false;
+    // Find the start of the word to complete
     int start = cursorPos;
     while (start > 0 && text[start-1] != ' ') start--;
     std::string prefix = text.substr(start, cursorPos - start);
     if (prefix.empty()) return false;
+
+    // --- Channel completion (word starts with '#') ---
+    if (prefix[0] == '#') {
+        const auto& channels = model_->getJoinedChannels();
+        if (channels.empty()) return false;
+
+        // Prepare for cycling through matches
+        if (prefix != completionPrefix_) {
+            completionPrefix_ = prefix;
+            completionIndex_ = 0;
+        }
+
+        std::vector<std::string> matches;
+        for (const auto& chan : channels) {
+            if (chan.size() >= prefix.size() &&
+                strncasecmp(chan.c_str(), prefix.c_str(), prefix.size()) == 0) {
+                matches.push_back(chan);
+            }
+        }
+        if (matches.empty()) return false;
+        if (completionIndex_ >= (int)matches.size()) completionIndex_ = 0;
+        std::string newWord = matches[completionIndex_++];
+        newText = text.substr(0, start) + newWord + text.substr(cursorPos);
+        newPos = start + (int)newWord.size();
+        return true;
+    }
+
+    // --- Nick completion (original behaviour) ---
+    if (model_->getCurrentChannel().empty() || model_->getNicks().empty()) return false;
 
     if (prefix != completionPrefix_) {
         completionPrefix_ = prefix;
@@ -450,6 +481,7 @@ void IRCController::onConnectionFailed(const std::string& reason) {
 void IRCController::onDisconnected() {
     view_->appendMessage("*** Disconnected.");
     updateNickCompletionList();
+    showNamesOutput_ = false;
 }
 
 void IRCController::onJoin(const std::string& nick, const std::string& channel) {
@@ -521,9 +553,11 @@ static bool caseInsensitiveFind(const std::vector<std::string>& vec, const std::
 }
 
 void IRCController::onNamesComplete(const std::string& channel, const std::vector<std::string>& nicks) {
+    if (!showNamesOutput_) return;   // only print when explicitly requested
+
+    // (original code for displaying the nicklist)
     std::vector<std::string> allNicks = nicks;
     std::string myNick = model_->getNickname();
-    // Add my own nick only if it's not already present (case‑insensitive)
     if (!myNick.empty() && !caseInsensitiveFind(allNicks, myNick)) {
         allNicks.push_back(myNick);
     }
@@ -539,8 +573,9 @@ void IRCController::onNamesComplete(const std::string& channel, const std::vecto
         }
         view_->appendMessage("*** Users in " + channel + ": " + nicklist);
     }
-}
 
+    showNamesOutput_ = false;          // reset flag after displaying
+}
 void IRCController::onMotdEnd() {
     view_->appendMessage("*** You can now join channels (e.g., /join #channel)");
 }

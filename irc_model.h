@@ -27,7 +27,7 @@ public:
     void partChannel(const std::string& channel, const std::string& reason = "");
     void changeNick(const std::string& newnick);
     void requestNames(const std::string& channel);
-    void sendTopic(const std::string& channel, const std::string& topic = "");   // NEW
+    void sendTopic(const std::string& channel, const std::string& topic = "");
     void sendWhois(const std::string& nick);
     void sendMode(const std::string& target, const std::string& modeArgs);
 
@@ -37,9 +37,12 @@ public:
     void setDefaultTarget(const std::string& target);
     const std::vector<std::string>& getNicks() const;
 
+    const std::vector<std::string>& getJoinedChannels() const;
+    void addJoinedChannel(const std::string& channel);
+    void removeJoinedChannel(const std::string& channel);
+
     void onSocketReady();
     void setCurrentChannel(const std::string& channel);
-
 
 private:
     void processLine(const std::string& line);
@@ -56,6 +59,7 @@ private:
     std::string currentChannel_;
     std::string defaultTarget_;
     std::vector<std::string> nicks_;
+    std::vector<std::string> joinedChannels_;
     std::string lineBuffer_;
 
     IRCController* controller_;

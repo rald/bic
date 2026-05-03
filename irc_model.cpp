@@ -145,6 +145,21 @@ const std::vector<std::string>& IRCModel::getNicks() const {
     return nicks_;
 }
 
+const std::vector<std::string>& IRCModel::getJoinedChannels() const {
+    return joinedChannels_;
+}
+
+void IRCModel::addJoinedChannel(const std::string& channel) {
+    if (std::find(joinedChannels_.begin(), joinedChannels_.end(), channel) == joinedChannels_.end())
+        joinedChannels_.push_back(channel);
+}
+
+void IRCModel::removeJoinedChannel(const std::string& channel) {
+    auto it = std::find(joinedChannels_.begin(), joinedChannels_.end(), channel);
+    if (it != joinedChannels_.end())
+        joinedChannels_.erase(it);
+}
+
 void IRCModel::connectToServer(const std::string& server, int port, const std::string& nick) {
     if (isConnected() || connectAttempt_) {
         if (controller_) controller_->onError("Already connected or connecting");
@@ -253,6 +268,7 @@ void IRCModel::disconnect(const std::string& quitmsg) {
     currentChannel_.clear();
     defaultTarget_.clear();
     nicks_.clear();
+    joinedChannels_.clear();
     lineBuffer_.clear();
     if (controller_) controller_->onDisconnected();
 }
@@ -680,6 +696,7 @@ void IRCModel::processLine(const std::string& line) {
         if (nick == nickname_ && !channel.empty()) {
             currentChannel_ = channel;
             nicks_.clear();
+            addJoinedChannel(channel);
         } else if (channel == currentChannel_) {
             if (std::find(nicks_.begin(), nicks_.end(), nick) == nicks_.end())
                 nicks_.push_back(nick);
@@ -702,7 +719,10 @@ void IRCModel::processLine(const std::string& line) {
             if (it != nicks_.end()) nicks_.erase(it);
             if (controller_) controller_->onNickList(nicks_);
         }
-        if (nick == nickname_ && channel == currentChannel_) currentChannel_.clear();
+        if (nick == nickname_ && channel == currentChannel_) {
+            currentChannel_.clear();
+            removeJoinedChannel(channel);
+        }
         return;
     }
 

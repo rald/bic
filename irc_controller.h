@@ -67,6 +67,7 @@ private:
     std::string savedInput_;
     std::string completionPrefix_;
     int completionIndex_;
+	bool showNamesOutput_; 
 
     std::unordered_map<std::string, std::string> ignoredNicks_;  // lower -> original
 };
