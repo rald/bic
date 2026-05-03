@@ -120,10 +120,10 @@ IRCView::IRCView() {
     logdisp_->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
     input_ = new HistoryInput(0, 420, 520, 30, "");
-    input_->when(FL_WHEN_ENTER_KEY);               // Explicit: only Enter triggers callback
+    input_->when(FL_WHEN_ENTER_KEY);
     sendBtn_ = new Fl_Button(520, 420, 80, 30, "Send");
 
-    sendBtn_->visible_focus(0);                    // Prevents button from taking keyboard focus
+    sendBtn_->visible_focus(0);
 
     window_->resizable(logdisp_);
     window_->end();
@@ -139,12 +139,11 @@ IRCView::IRCView() {
     input_->textcolor(FL_GREEN);
     input_->cursor_color(FL_GREEN);
     input_->textfont(FL_COURIER);
-
 }
 
 IRCView::~IRCView() {
-    delete window_;     // deletes logdisp_, input_, sendBtn_
-    delete logbuf_;     // buffer must be deleted after the display
+    delete window_;
+    delete logbuf_;
 }
 
 void IRCView::show() {
@@ -154,14 +153,16 @@ void IRCView::show() {
 }
 
 void IRCView::appendMessage(const std::string& msg) {
-    bool atBottom = isAtBottom();
+    bool atBottom = isAtBottom();               // check before adding
     std::string line = "[" + get_timestamp() + "] " + msg + "\n";
-    logbuf_->append(line.c_str());
-    if (atBottom) scrollToBottom();
+    logbuf_->append(line.c_str());              // add the new line
+    if (atBottom) scrollToBottom();             // only scroll if user was at bottom
 }
 
 void IRCView::clearDisplay() {
     logbuf_->text("");
+    // After clearing, the user is effectively at the bottom (empty buffer)
+    scrollToBottom();
 }
 
 void IRCView::setInputFocus() {
@@ -207,8 +208,13 @@ bool IRCView::isAtBottom() const {
 #if FLTK_MAJOR_VERSION > 1 || (FLTK_MAJOR_VERSION == 1 && FLTK_MINOR_VERSION >= 3)
     Fl_Scrollbar* sb = logdisp_->scrollbar();
     if (!sb) return true;
-    return (sb->value() + sb->linesize() >= sb->maximum() - 0.5);
+    double top = sb->value();
+    double maxVal = sb->maximum();
+    double pageSize = sb->visible();   // number of lines visible in the display
+    // Add a small tolerance for floating point rounding
+    return (top + pageSize + 0.5 >= maxVal);
 #else
+    // For FLTK 1.1, we cannot reliably detect, so keep the old behaviour
     return true;
 #endif
 }
