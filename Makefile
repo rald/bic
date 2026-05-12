@@ -1,25 +1,7 @@
-CXX = g++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2
-LDLIBS = -lfltk -lpthread -lX11
+bic: main.cpp irc_model.cpp irc_model.h irc_view.cpp irc_view.h irc_controller.cpp irc_controller.h
+	g++ main.cpp irc_model.cpp irc_view.cpp irc_controller.cpp -o bic -lfltk
 
-# Default target name
-TARGET = bic
-
-SRCS = main.cpp irc_model.cpp irc_view.cpp irc_controller.cpp
-OBJS = $(SRCS:.cpp=.o)
-DEPS = $(OBJS:.o=.d)
-
-all: $(TARGET)
-
-$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
-
--include $(DEPS)
+.PHONY: clean
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(TARGET)
-
-.PHONY: all clean
+	rm bic
